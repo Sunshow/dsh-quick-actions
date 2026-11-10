@@ -1,0 +1,54 @@
+{
+  "name": "dsh-quick-actions",
+  "version": "0.1.0",
+  "description": "快捷操作：在任意界面（含新会话页）用快捷键执行工作区操作，例如拉取最新代码；快捷键可在设置中分组管理。 · Keyboard shortcuts for workspace actions (git pull, session and layout commands) with a grouped settings page.",
+  "license": "MIT",
+  "author": "Sunshow",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "shortcuts",
+    "keyboard",
+    "git",
+    "productivity"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sunshow/dsh-quick-actions.git"
+  },
+  "homepage": "https://github.com/Sunshow/dsh-quick-actions#readme",
+  "bugs": {
+    "url": "https://github.com/Sunshow/dsh-quick-actions/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "LICENSE",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

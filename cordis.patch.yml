@@ -1,0 +1,3 @@
+- insert:
+    - id: quick-actions
+      name: 'dsh-quick-actions'

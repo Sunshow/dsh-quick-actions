@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400" role="img" aria-label="dsh-quick-actions architecture: browser half, localStorage, HTTP routes, host half">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .panel { fill: #f6f8fb; stroke: #d5dbe3; stroke-width: 1.2; rx: 12; }
+      .box { fill: #ffffff; stroke: #c9d2dd; stroke-width: 1; rx: 8; }
+      .title { font: 600 15px "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2937; }
+      .sub { font: 400 12px "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; fill: #4b5563; }
+      .item { font: 400 12.5px "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; fill: #374151; }
+      .hint { font: 400 11px "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b7280; }
+      .accent { fill: #2f7dd1; }
+      .line { stroke: #6b7280; stroke-width: 1.3; fill: none; }
+      .dash { stroke: #9aa4b2; stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="900" height="400"/>
+
+  <!-- left: web ui -->
+  <rect class="panel" x="28" y="64" width="248" height="286"/>
+  <text class="title" x="44" y="90">Web UI · client.js</text>
+  <rect class="box" x="44" y="104" width="216" height="40"/>
+  <text class="item" x="56" y="129">Global keydown listener</text>
+  <rect class="box" x="44" y="152" width="216" height="40"/>
+  <text class="item" x="56" y="177">Settings page (groups)</text>
+  <rect class="box" x="44" y="200" width="216" height="40"/>
+  <text class="item" x="56" y="225">Composer button + menu</text>
+  <rect class="box" x="44" y="248" width="216" height="40"/>
+  <text class="item" x="56" y="273">Result notice</text>
+  <text class="hint" x="44" y="310">React components in slots:</text>
+  <text class="hint" x="44" y="326">settings.section · shell.overlay</text>
+  <text class="hint" x="44" y="342">conversation.input.left</text>
+
+  <!-- middle: storage + routes -->
+  <rect class="box" x="322" y="96" width="256" height="86"/>
+  <text class="title" x="338" y="120">localStorage</text>
+  <text class="hint" x="338" y="142">shortcut bindings · custom commands</text>
+  <text class="hint" x="338" y="158">fallback directory</text>
+  <text class="hint" x="338" y="174">survives a Host restart</text>
+
+  <rect class="box" x="322" y="228" width="256" height="86"/>
+  <text class="title" x="338" y="252">HTTP routes</text>
+  <text class="hint" x="338" y="274">GET  /api/quick-actions/catalog</text>
+  <text class="hint" x="338" y="290">POST /api/quick-actions/run</text>
+  <text class="hint" x="338" y="306">method + same-origin checks</text>
+
+  <!-- right: host -->
+  <rect class="panel" x="624" y="64" width="248" height="286"/>
+  <text class="title" x="640" y="90">Host · index.js</text>
+  <rect class="box" x="640" y="104" width="216" height="40"/>
+  <text class="item" x="652" y="129">Action catalog (groups)</text>
+  <rect class="box" x="640" y="152" width="216" height="40"/>
+  <text class="item" x="652" y="177">Directory guard</text>
+  <rect class="box" x="640" y="200" width="216" height="40"/>
+  <text class="item" x="652" y="225">git pull / fetch</text>
+  <rect class="box" x="640" y="248" width="216" height="40"/>
+  <text class="item" x="652" y="273">Custom command (login shell)</text>
+  <text class="hint" x="640" y="310">only inside a registered</text>
+  <text class="hint" x="640" y="326">workspace directory</text>
+
+  <!-- arrows -->
+  <path class="dash" d="M 276 140 L 322 140" marker-end="url(#arrow)"/>
+  <path class="dash" d="M 322 160 L 276 160" marker-end="url(#arrow)"/>
+  <path class="line" d="M 276 265 L 322 271" marker-end="url(#arrow)"/>
+  <path class="line" d="M 578 265 L 624 265" marker-end="url(#arrow)"/>
+  <path class="line" d="M 624 300 C 500 372 360 372 276 300" marker-end="url(#arrow)"/>
+  <text class="hint" x="382" y="360">result → notice</text>
+
+  <text class="title" x="28" y="34">dsh-quick-actions — how it works</text>
+  <text class="hint" x="28" y="52">Commands never run in the browser: the Client only decides which action to run, the Host resolves the directory and executes it.</text>
+</svg>
