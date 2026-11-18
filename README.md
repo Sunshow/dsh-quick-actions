@@ -54,7 +54,13 @@ Then install the directory as a bundle in the current profile — in a DSH sessi
 plugin_manager action=install_bundle target=/absolute/path/to/dsh-quick-actions
 ```
 
-Or from a shell with the profile's `dsh` on PATH: install through DSH's own bundle manager (the Local bundle page in Settings → Plugins), pointing at the same directory. A directory install is a **link**: `git pull` updates the code without reinstalling.
+Or from a shell with the profile's `dsh` on PATH — this is the command the plugin list offers:
+
+```bash
+dsh plugin --profile web add github:Sunshow/dsh-quick-actions   # profile name as in your install
+```
+
+Inside the Desktop app you can also use Settings → Plugins → Local bundle and point it at the cloned directory. A directory install is a **link**: `git pull` updates the code without reinstalling, and there is no build step — `client.js` is committed.
 
 After installing, refresh the page once (the Client half is loaded at boot) and press `⌘⇧P`.
 
