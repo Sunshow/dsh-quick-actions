@@ -128,12 +128,11 @@ window.__ModuleLoader__.load({
         'picker.defaultWorkspace': '默认工作区',
         'picker.sessions': '{count} 个会话',
         'picker.empty': '没有匹配的工作区',
-        'picker.emptyHint': '直接键入即可搜索；中文目录名可以粘贴。',
+        'picker.emptyHint': '直接键入即可搜索，中文输入法可以直接使用。',
         'picker.noWorkspaces': '还没有登记任何工作区，请先在侧栏添加一个',
         'picker.loading': '正在读取工作区…',
         'picker.loadError': '读取工作区列表失败，请稍后重试',
         'picker.footHint': '↑↓ 选择 · ↵ 新建会话 · Esc 取消',
-        'picker.imeNote': '直接键入即可搜索 · 等同英文输入态',
       },
       en: {
         'page.title': 'Quick actions',
@@ -184,12 +183,11 @@ window.__ModuleLoader__.load({
         'picker.defaultWorkspace': 'Default workspace',
         'picker.sessions': '{count} sessions',
         'picker.empty': 'No workspace matches',
-        'picker.emptyHint': 'Type to search; a non-ASCII name can be pasted.',
+        'picker.emptyHint': 'Type to search; any script or input method works.',
         'picker.noWorkspaces': 'No workspace registered yet — add one from the sidebar first',
         'picker.loading': 'Loading workspaces…',
         'picker.loadError': 'Could not read the workspace list — try again',
         'picker.footHint': '↑↓ select · ↵ new session · Esc cancel',
-        'picker.imeNote': 'Type to search — keys bypass the input method',
       },
     };
 
@@ -504,25 +502,6 @@ window.__ModuleLoader__.load({
       return ranked.map(function unwrap(entry) {
         return entry.workspace;
       });
-    }
-
-    /**
-     * The text one keystroke contributes to a query.
-     *
-     * A printable ASCII `key` is taken as typed. When an input method or a
-     * non-Latin keyboard layout has consumed it (`key: 'Process'`, or a Cyrillic
-     * letter), the physical `code` supplies the letter printed on that key, so
-     * leaning on the keyboard still searches by its Latin spelling.
-     */
-    function printableKey(event) {
-      const key = event.key;
-      if (typeof key === 'string' && key.length === 1 && key >= ' ' && key <= '~') return key;
-      const code = String(event.code || '');
-      const letter = /^Key([A-Z])$/.exec(code);
-      if (letter !== null) return letter[1].toLowerCase();
-      const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
-      if (digit !== null) return digit[1];
-      return null;
     }
 
     function isEditableTarget(target) {
@@ -897,85 +876,122 @@ window.__ModuleLoader__.load({
         commitWorkspacePicker(list[Math.min(Math.max(state.index, 0), list.length - 1)]);
       }
 
-      // Paste and copy are the one thing the palette leaves to the browser: a
-      // pasted name is how a workspace written in another script is searched.
-      // Select-all and cut stay blocked, so the caret never leaves the end and
-      // typing can never leave a stale selection behind.
-      function isClipboardShortcut(event) {
-        if (!(IS_MAC ? event.metaKey : event.ctrlKey) || event.altKey) return false;
-        const key = String(event.key || '').toLowerCase();
-        return key === 'v' || key === 'c';
+      /** The palette's search field, the element the palette keys act on. */
+      function pickerField() {
+        try {
+          const field = document.querySelector('.qa-palette__input');
+          return field && isEditableTarget(field) ? field : null;
+        } catch (error) {
+          return null;
+        }
       }
 
-      function pasteIntoQuery(event) {
-        const clipboard = event.clipboardData || window.clipboardData;
-        if (!clipboard || typeof clipboard.getData !== 'function') return;
-        event.preventDefault();
-        const text = String(clipboard.getData('text') || '').replace(/\s+/g, ' ');
-        if (text === '') return;
-        setPickerQuery(pickerStore.getSnapshot().query + text);
+      function moveFieldCaret(field, position) {
+        const length = field.value.length;
+        const next = Math.min(Math.max(position, 0), length);
+        try {
+          field.setSelectionRange(next, next);
+        } catch (error) {
+          /* a field that refuses a range keeps its caret where it was */
+        }
+      }
+
+      function deleteFieldRange(field, start, end) {
+        const from = Math.min(Math.max(start, 0), field.value.length);
+        const to = Math.min(Math.max(end, 0), field.value.length);
+        if (to <= from) return;
+        try {
+          field.setSelectionRange(from, to);
+        } catch (error) {
+          return;
+        }
+        // Let the browser do the deleting: it fires the change event React
+        // listens for and keeps the field's own undo stack in one piece. Only
+        // an engine without the command falls back to editing the value.
+        if (typeof document.execCommand === 'function') {
+          try {
+            if (document.execCommand('delete', false, null)) return;
+          } catch (error) {
+            /* fall through to the value edit */
+          }
+        }
+        field.value = field.value.slice(0, from) + field.value.slice(to);
+        moveFieldCaret(field, from);
+        field.dispatchEvent(new Event('input', { bubbles: true }));
       }
 
       /**
-       * The palette owns the keyboard while it is open. Printable keys are read
-       * from the event itself and the native input never sees them, so typing
-       * behaves as if the input method were in its English state — a web page
-       * cannot switch the OS input method, this sidesteps it instead.
+       * macOS text views give Ctrl-A/E/B/F caret movement, Ctrl-K/U line kills
+       * and Ctrl-D/H character deletes. Chromium implements none of them inside
+       * a page, so the palette supplies them for its own field. A bare Control
+       * modifier is required: on other platforms Ctrl-A is select-all, and every
+       * other stroke keeps its native meaning.
+       */
+      function applyEmacsEditing(event, field) {
+        if (!IS_MAC || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+        const key = String(event.key || '').toLowerCase();
+        const start = field.selectionStart === null ? field.value.length : field.selectionStart;
+        const end = field.selectionEnd === null ? start : field.selectionEnd;
+        if (key === 'a') moveFieldCaret(field, 0);
+        else if (key === 'e') moveFieldCaret(field, field.value.length);
+        else if (key === 'b') moveFieldCaret(field, start === end ? start - 1 : start);
+        else if (key === 'f') moveFieldCaret(field, start === end ? end + 1 : end);
+        else if (key === 'k') deleteFieldRange(field, start, field.value.length);
+        else if (key === 'u') deleteFieldRange(field, 0, end);
+        else if (key === 'd') deleteFieldRange(field, start, start === end ? start + 1 : end);
+        else if (key === 'h') deleteFieldRange(field, start === end ? start - 1 : start, end);
+        else return false;
+        return true;
+      }
+
+      /**
+       * The palette claims the strokes that mean something to it, and only
+       * those. Everything else belongs to the search field: typing, an input
+       * method's composition, selection, caret movement and the platform's
+       * editing commands stay native, so the field behaves exactly like any
+       * other text field on the page. What must not happen is the stroke
+       * reaching the app behind the palette, so every stroke is still kept from
+       * propagating — that is not the same as cancelling its default action.
        */
       function handlePickerKey(event) {
-        if (isClipboardShortcut(event)) {
-          // Let the default action reach the field, but keep the app from
-          // treating the same stroke as its own shortcut.
+        // A stroke an input method is consuming belongs to that input method.
+        // `isComposing` covers the strokes of a composition; keyCode 229 also
+        // covers the stroke some browsers deliver right after it ends.
+        if (event.isComposing === true || event.keyCode === 229) {
           event.stopPropagation();
           return;
         }
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.isComposing) return;
 
         const state = pickerStore.getSnapshot();
+        const field = pickerField();
+        if (field !== null && applyEmacsEditing(event, field)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
         const key = event.key;
+        let handled = true;
         if (key === 'Escape') {
           closeWorkspacePicker(true);
-          return;
-        }
-        if (key === 'ArrowDown' || key === 'Tab') {
+        } else if (key === 'ArrowDown' || key === 'Tab') {
           movePickerCursor(event.shiftKey ? -1 : 1);
-          return;
-        }
-        if (key === 'ArrowUp') {
+        } else if (key === 'ArrowUp') {
           movePickerCursor(-1);
-          return;
-        }
-        if (key === 'PageDown') {
+        } else if (key === 'PageDown') {
           setPickerCursor(state.index + PICKER_PAGE_SIZE);
-          return;
-        }
-        if (key === 'PageUp') {
+        } else if (key === 'PageUp') {
           setPickerCursor(state.index - PICKER_PAGE_SIZE);
-          return;
-        }
-        if (key === 'Home') {
-          setPickerCursor(0);
-          return;
-        }
-        if (key === 'End') {
-          setPickerCursor(pickerCandidates(state.query).length - 1);
-          return;
-        }
-        if (key === 'Enter') {
+        } else if (key === 'Enter') {
           selectCurrentPickerWorkspace();
-          return;
+        } else {
+          // Text, Backspace, Delete, Left/Right, Home/End and the platform's
+          // other editing strokes are the field's job.
+          handled = false;
         }
-        if (key === 'Backspace') {
-          if (event.metaKey || event.ctrlKey || event.altKey) setPickerQuery('');
-          else setPickerQuery(state.query.slice(0, -1));
-          return;
-        }
-        if (event.metaKey || event.ctrlKey || event.altKey) return;
-        const text = printableKey(event);
-        if (text === null) return;
-        setPickerQuery(state.query + text);
+
+        if (handled) event.preventDefault();
+        event.stopPropagation();
       }
 
       /* ------------------------------------------------------------ catalog */
@@ -1784,11 +1800,13 @@ window.__ModuleLoader__.load({
 
           return portalLayer(h('div', {
             className: 'qa-palette-layer',
-            // Pressing the field clears nothing; keeping focus on the input is
-            // what lets the next keystroke keep filtering after a mouse click.
             onMouseDown: function onBackdrop(event) {
+              // A press inside the palette is the palette's own business: the
+              // field must keep its caret and its selection, so its handlers
+              // decide what a click means. Only a press on the backdrop closes.
+              if (event.target !== event.currentTarget) return;
               event.preventDefault();
-              if (event.target === event.currentTarget) closeWorkspacePicker(true);
+              closeWorkspacePicker(true);
             },
           },
             h('div', {
@@ -1797,6 +1815,13 @@ window.__ModuleLoader__.load({
               'aria-modal': 'true',
               'aria-label': t('picker.title'),
               'data-shortcut-modal': 'quick-actions',
+              onMouseDown: function keepCaretInField(event) {
+                // Clicking the list, a row or the footer must not move focus
+                // out of the search field; a click inside the field itself is
+                // left alone so it can place the caret.
+                if (isEditableTarget(event.target)) return;
+                event.preventDefault();
+              },
             },
               h('div', { className: 'qa-palette__head' },
                 h('span', { className: 'qa-palette__head-title' }, t('picker.title')),
@@ -1822,12 +1847,11 @@ window.__ModuleLoader__.load({
                   autoCorrect: 'off',
                   autoCapitalize: 'off',
                   spellCheck: false,
-                  lang: 'en',
+                  maxLength: PICKER_QUERY_MAX,
                   inputMode: 'text',
                   onChange: function syncQuery(event) {
                     setPickerQuery(event.target.value);
                   },
-                  onPaste: pasteIntoQuery,
                 }),
                 allWorkspaces.length === 0
                   ? null
@@ -1843,7 +1867,6 @@ window.__ModuleLoader__.load({
               }, body),
               h('div', { className: 'qa-palette__foot' },
                 h('span', { className: 'qa-palette__hint' }, t('picker.footHint')),
-                h('span', { className: 'qa-palette__ime' }, t('picker.imeNote')),
               ),
             ),
           ));
@@ -1977,7 +2000,6 @@ window.__ModuleLoader__.load({
       '.qa-palette__empty-hint { margin-top: 4px; color: var(--dsw-alias-label-tertiary); }',
       '.qa-palette__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--dsw-alias-border-l1); font-size: 11px; color: var(--dsw-alias-label-tertiary); }',
       '.qa-palette__hint { flex: none; white-space: nowrap; }',
-      '.qa-palette__ime { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }',
       '@keyframes qa-palette-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }',
       '@keyframes qa-notice-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }',
     ].join('\n');

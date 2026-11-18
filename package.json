@@ -1,6 +1,6 @@
 {
   "name": "dsh-quick-actions",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "快捷操作：在任意界面（含新会话页）用快捷键执行工作区操作，例如拉取最新代码、选工作区开新会话；快捷键可在设置中分组管理。 · Keyboard shortcuts for workspace actions (git pull, workspace picker, session and layout commands) with a grouped settings page.",
   "license": "MIT",
   "author": "Sunshow",

@@ -28,7 +28,7 @@ DSH is keyboard-driven, but running something against *the current workspace* �
 
 - **Global shortcuts.** A capture-phase `keydown` listener runs while the caret sits in the composer: plain typing stays with the field, while any `Mod` / `Ctrl` / `Alt` combination is treated as a command.
 - **Default binding `⌘⇧P`** (`Ctrl+Shift+P` elsewhere) → `git pull --ff-only` in the current workspace, result in a transient notice. It follows the git-GUI "pull" convention and avoids the browser-reserved `⌘T` / `⌘⇧T` / `⌘W`.
-- **Workspace picker on `⌘⇧N`.** Opens from any screen — New Session, a running conversation, even behind an open Settings dialog, because the palette is portalled to `document.body` rather than the slot layer (`shell.overlay` is a `z-index:20` stacking context, so a slot-mounted overlay would paint under any dialog). Type to filter, `↑` `↓` to move, `Enter` starts a session in the highlighted workspace. Typed keys are read as plain letters, so the search behaves as if the input method were in its English state (see [Workspace picker](#workspace-picker)).
+- **Workspace picker on `⌘⇧N`.** Opens from any screen — New Session, a running conversation, even behind an open Settings dialog, because the palette is portalled to `document.body` rather than the slot layer (`shell.overlay` is a `z-index:20` stacking context, so a slot-mounted overlay would paint under any dialog). Type to filter, `↑` `↓` to move, `Enter` starts a session in the highlighted workspace. The search field is an ordinary text field: typing, an input method's composition, selection and caret movement all behave the way they do anywhere else (see [Workspace picker](#workspace-picker)).
 - **Clickable entry point.** A keycap button in the composer tool row opens the same grouped actions — one click instead of a keypress — and shows which directory the run will use.
 - **Grouped settings page** (`Settings → Quick actions`): Git, Session & layout, and your own **Custom commands** group, each row with a recordable shortcut chip, reset, edit and delete.
 - **Custom commands.** Add a name plus a shell line; it is immediately available in the menu and can be bound to any combination. Runs through a **login shell**, so `nvm` / Homebrew / `pyenv` PATH entries are available.
@@ -83,17 +83,19 @@ Recording a shortcut: click the chip, press the combination (`Esc` cancels, `Bac
 | --- | --- |
 | type | Filter by workspace title, then directory name, then full path |
 | `↑` `↓` / `Tab` / `Shift+Tab` | Move the highlight |
-| `Home` `End` / `PageUp` `PageDown` | Jump to the first, last, or five rows away |
+| `PageUp` `PageDown` | Jump five rows |
+| `←` `→` / `Home` `End` | Move the caret in the field, as usual |
+| `Ctrl+A` `Ctrl+E` (macOS) | Jump to the start / end of the line; `Ctrl+B` / `Ctrl+F` step a character, `Ctrl+K` / `Ctrl+U` kill to the end / start, `Ctrl+D` / `Ctrl+H` delete forward / backward |
 | `Enter` | Open (or reuse the draft of) a blank session in that workspace |
-| `⌘V` / `Ctrl+V` | Paste a name — the way to search a non-ASCII directory name |
-| `⌘C` / `Ctrl+C` | Copy, as usual (select-all and cut stay inside the palette) |
+| `⌘V` / `Ctrl+V` | Paste a name — any script works |
+| `⌘C` / `Ctrl+C` | Copy the selected text, as usual |
 | `Esc` / click outside | Close |
 
 A pick reports its outcome only once `uiWorkspace.openWorkspace` settles, so a refused request says so instead of claiming success.
 
-A web page cannot switch the operating system's input method, so the palette sidesteps the question instead of guessing at it: the search field does not handle typing itself. The palette reads each keystroke from the `keydown` event and appends it to the query, so typing behaves as if the input method were in its English state — a Chinese, Japanese or Korean input method left active cannot turn the search into a candidate window, and filtering is never a keystroke behind.
+The search field is an ordinary text field. The palette claims only the strokes that mean something to it — `↑` `↓` `Tab`, `PageUp` / `PageDown`, `Enter`, `Esc` — and keeps every other stroke from reaching the app's shortcut layer without cancelling the browser's default action. An active Chinese, Japanese or Korean input method therefore behaves normally: composition is never intercepted, so its first character lands once, and typing, selection, `Backspace` / `Delete` and the caret keys are the browser's own.
 
-When that key reports no letter of its own — an input method consumed it (`key: "Process"`) or the layout is not Latin (a Cyrillic `ф`) — the palette falls back to the physical key (`code`) and takes the letter printed on it, so a keyboard laid out in another script still searches by the Latin spelling of a directory name. `⌘V` remains the way to paste a name that is not Latin at all.
+Chromium does not implement the emacs-style editing strokes that macOS text views offer inside a page, so on macOS the palette provides the common ones for its own field: `Ctrl+A` / `Ctrl+E` (line start / end), `Ctrl+B` / `Ctrl+F` (one character back / forward), `Ctrl+K` / `Ctrl+U` (kill to line end / start) and `Ctrl+D` / `Ctrl+H` (delete forward / backward). A bare Control modifier is required, which keeps `Ctrl+A` as select-all on Windows and Linux.
 
 Because the palette is mounted on `document.body` above every body-portalled dialog, it stays visible and usable with Settings or a primitive `Modal` open; closing it hands the caret back to the field it took it from.
 
@@ -184,7 +186,7 @@ plugin_manager action=set_plugin target=include:quick-actions enabled=true
 node test/client-flow.test.cjs   # or: npm test
 ```
 
-It builds a throwaway window/React host around the real `client.js` and drives the palette through the listener the plugin installs — default stroke, capture of typed keys, the physical-key fallback, ranking, `Enter`/`Escape`, `Home`/`End`, the paste pass-through, a recorded binding outranking a new default, and both fixed layers reaching `document.body` — without a browser or a rendering layer.
+It builds a throwaway window/React host around the real `client.js` and drives the palette through the listener the plugin installs — default stroke, native typing and IME composition, caret/editing keys including the macOS `Ctrl+A` family, ranking, `Enter`/`Escape`, a recorded binding outranking a new default, and both fixed layers reaching `document.body` — without a browser or a rendering layer.
 
 ## License
 

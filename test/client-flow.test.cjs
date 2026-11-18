@@ -9,11 +9,13 @@
  *
  * What it covers, through the real source file:
  *   - the default Mod+Shift+N stroke opens the palette and takes the keyboard;
- *   - typed keys never reach the field, so an active input method cannot interfere;
- *   - an input method that consumed the character still contributes its physical key;
+ *   - typing, composition, caret movement and the platform's editing strokes stay
+ *     with the field, so an active input method is neither bypassed nor doubled;
+ *   - the palette still owns its navigation strokes and hides every stroke from
+ *     the app's shortcut layer;
  *   - ranking filters and orders workspaces (prefix > infix > subsequence, title > name > path);
  *   - Enter opens the highlighted workspace and reports completion only afterwards;
- *   - Escape closes and releases the keyboard, paste passes through, select-all does not;
+ *   - Escape closes and releases the keyboard;
  *   - a binding the user recorded outranks a newly added default;
  *   - both fixed layers are mounted on document.body, above body-portalled dialogs.
  *
@@ -112,6 +114,20 @@ function boot(seed = {}) {
     fetch: async () => ({ ok: true, json: async () => CATALOG }),
   }
 
+  // The handler looks the search field up by its class, exactly as it does in
+  // the page; this stub stands in for the real input element.
+  const fieldElement = {
+    tagName: 'INPUT',
+    value: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+    setSelectionRange(start, end) {
+      this.selectionStart = start
+      this.selectionEnd = end
+    },
+    dispatchEvent() {},
+  }
+
   const fakeDocument = {
     activeElement: { tagName: 'DIV', focus() {} },
     body: { tagName: 'BODY', portalHost: true },
@@ -124,8 +140,8 @@ function boot(seed = {}) {
     contains() {
       return true
     },
-    querySelector() {
-      return null
+    querySelector(selector) {
+      return selector === '.qa-palette__input' ? fieldElement : null
     },
     querySelectorAll() {
       return []
@@ -229,6 +245,7 @@ function boot(seed = {}) {
     const event = {
       key: init.key,
       code: init.code || '',
+      keyCode: typeof init.keyCode === 'number' ? init.keyCode : 0,
       metaKey: init.meta === true,
       ctrlKey: init.ctrl === true,
       altKey: init.alt === true,
@@ -277,6 +294,30 @@ function boot(seed = {}) {
     return { open: true, query: input ? input.props.value : '', rows, active, tree }
   }
 
+  /** What the browser does when the field's value changes. */
+  function field(value) {
+    fieldElement.value = value
+    fieldElement.selectionStart = value.length
+    fieldElement.selectionEnd = value.length
+    const input = collect(palette().tree, (node) => node.type === 'input')[0]
+    if (!input) throw new Error('the palette field is not rendered')
+    input.props.onChange({ target: { value } })
+  }
+
+  /**
+   * Type at the end of the field the way the browser does: a keydown that the
+   * page may cancel, then an input event carrying the resulting value. The
+   * palette must not add the character on its own.
+   */
+  function type(text) {
+    Array.from(text).forEach((character) => {
+      const letter = /^[a-z]$/i.test(character)
+      const event = press({ key: character, code: letter ? 'Key' + character.toUpperCase() : '' })
+      if (event.prevented) return
+      field(palette().query + character)
+    })
+  }
+
   /** Latest toast the notice layer would show. */
   function toast() {
     const tree = notice.component()
@@ -290,7 +331,7 @@ function boot(seed = {}) {
     }
   }
 
-  return { press, palette, toast, opened, portals, registered, picker, noticeTree: () => notice.component() }
+  return { press, field, type, palette, toast, opened, portals, registered, picker, fieldElement, noticeTree: () => notice.component() }
 }
 
 /* -------------------------------------------------------------------- checks */
@@ -326,25 +367,98 @@ const stroke = { key: 'N', code: 'KeyN', meta: true, shift: true }
   check('every workspace is listed', app.palette().rows.length, WORKSPACES.length)
   check('the automatic default workspace reads as a name', app.palette().rows.indexOf('默认工作区') >= 0, true)
 
-  check('typing never reaches the field', app.press({ key: 'd' }).defaultPrevented, true)
-  app.press({ key: 's' })
-  app.press({ key: 'h' })
-  check('the query follows the keystrokes', app.palette().query, 'dsh')
+  // Typing belongs to the field: the palette neither cancels the stroke nor
+  // adds the character itself, so an active input method cannot double it.
+  const typedKey = app.press({ key: 'd' })
+  check('typing is not cancelled', typedKey.prevented, false)
+  check('typing is kept from the app shortcuts', typedKey.stopped, true)
+  app.field('d')
+  app.type('sh')
+  check('the query follows the typed text', app.palette().query, 'dsh')
   check('an exact title outranks a longer prefix', app.palette().rows, ['dsh', 'dsh-quick-actions'])
 
-  // An input method that consumed the character still contributes its physical key.
-  app.press({ key: 'Backspace' })
-  app.press({ key: 'Backspace' })
-  app.press({ key: 'Backspace' })
-  app.press({ key: 'Process', code: 'KeyQ' })
-  app.press({ key: 'Process', code: 'KeyA' })
-  check('a consumed key falls back to its physical letter', app.palette().query, 'qa')
+  // An input method's strokes stay inside the composition; the committed text
+  // reaches the field once, through its change event.
+  const composing = app.press({ key: 'Process', code: 'KeyZ', composing: true })
+  check('a composing stroke is not cancelled', composing.prevented, false)
+  check('a composing stroke is kept from the app shortcuts', composing.stopped, true)
+  app.field('中文')
+  check('committed text is not doubled', app.palette().query, '中文')
+  const composingEnter = app.press({ key: 'Enter', composing: true })
+  check('Enter that picks a candidate is not cancelled', composingEnter.prevented, false)
+  check('Enter that picks a candidate opens nothing', app.opened, [])
+  const trailing229 = app.press({ key: 'Enter', keyCode: 229 })
+  check('the 229 stroke after a composition is not cancelled', trailing229.prevented, false)
+  check('the 229 stroke opens nothing either', app.opened, [])
+  app.field('')
 
+  // Editing and caret strokes are native too; only the app layer is kept out.
+  const nativeStroke = (init) => {
+    const event = app.press(init)
+    return { prevented: event.prevented, stopped: event.stopped }
+  }
+  const native = { prevented: false, stopped: true }
+  check('Backspace stays with the field', nativeStroke({ key: 'Backspace' }), native)
+  check('Delete stays with the field', nativeStroke({ key: 'Delete' }), native)
+  check('Left arrow stays with the field', nativeStroke({ key: 'ArrowLeft' }), native)
+  check('Cmd-A (select all) stays with the field', nativeStroke({ key: 'a', meta: true }), native)
+  check('paste stays with the field', nativeStroke({ key: 'v', meta: true }), native)
+
+  // macOS text views move the caret with Ctrl-A/E/B/F and kill with Ctrl-K/U;
+  // Chromium gives a page none of that, so the palette supplies it for its field.
+  const paletteStroke = { prevented: true, stopped: true }
+  app.field('abcd')
+  check('Ctrl-A belongs to the palette on macOS', nativeStroke({ key: 'a', ctrl: true }), paletteStroke)
+  check('Ctrl-A moves to the start of the line', app.fieldElement.selectionStart, 0)
+  check('Ctrl-E belongs to the palette on macOS', nativeStroke({ key: 'e', ctrl: true }), paletteStroke)
+  check('Ctrl-E moves to the end of the line', app.fieldElement.selectionStart, 4)
+  nativeStroke({ key: 'b', ctrl: true })
+  check('Ctrl-B steps one character back', app.fieldElement.selectionStart, 3)
+  nativeStroke({ key: 'f', ctrl: true })
+  check('Ctrl-F steps one character forward', app.fieldElement.selectionStart, 4)
+  nativeStroke({ key: 'a', ctrl: true })
+  nativeStroke({ key: 'k', ctrl: true })
+  check('Ctrl-K kills to the end of the line', app.fieldElement.value, '')
+  app.field('abcd')
+  nativeStroke({ key: 'u', ctrl: true })
+  check('Ctrl-U kills to the start of the line', app.fieldElement.value, '')
+  app.field('abcd')
+  nativeStroke({ key: 'a', ctrl: true })
+  nativeStroke({ key: 'f', ctrl: true })
+  nativeStroke({ key: 'f', ctrl: true })
+  nativeStroke({ key: 'd', ctrl: true })
+  check('Ctrl-D deletes forward', app.fieldElement.value, 'abd')
+  nativeStroke({ key: 'h', ctrl: true })
+  check('Ctrl-H deletes backward', app.fieldElement.value, 'ad')
+  app.field('')
+
+  // The palette keeps its navigation strokes, and Home/End no longer steal the
+  // caret keys.
+  app.field('dsh')
+  check('ArrowDown moves the highlight', app.press({ key: 'ArrowDown' }).prevented, true)
+  check('the second row is highlighted', app.palette().active, 1)
+  check('Home is not cancelled', app.press({ key: 'Home' }).prevented, false)
+  check('Home leaves the highlight alone', app.palette().active, 1)
+  check('End is not cancelled', app.press({ key: 'End' }).prevented, false)
+  check('End leaves the highlight alone', app.palette().active, 1)
+  check('ArrowUp moves back', app.press({ key: 'ArrowUp' }).prevented, true)
+  check('the first row is highlighted again', app.palette().active, 0)
+
+  app.field('')
+  check('PageDown pages five rows', app.press({ key: 'PageDown' }).prevented, true)
+  check('the highlight is clamped to the last row', app.palette().active, WORKSPACES.length - 1)
+  check('PageUp pages back', app.press({ key: 'PageUp' }).prevented, true)
+  check('the highlight is back at the first row', app.palette().active, 0)
+  check('Tab moves the highlight', app.press({ key: 'Tab' }).prevented, true)
+  check('Shift-Tab moves it back', app.press({ key: 'Tab', shift: true }).prevented, true)
+  check('the first row is highlighted again', app.palette().active, 0)
+
+  // A native Backspace reports the shorter value; the query follows the field.
+  app.field('dsh')
   app.press({ key: 'Backspace' })
-  app.press({ key: 'Backspace' })
-  app.press({ key: 'd' })
-  app.press({ key: 's' })
-  app.press({ key: 'h' })
+  app.field('ds')
+  check('a native Backspace shortens the query', app.palette().query, 'ds')
+  app.type('h')
   app.press({ key: 'Enter' })
   await tick()
   check('Enter opened the highlighted workspace', app.opened, [['open', 'w-dsh']])
@@ -353,18 +467,14 @@ const stroke = { key: 'N', code: 'KeyN', meta: true, shift: true }
   check('typing is released after a pick', app.press({ key: 'd' }).defaultPrevented, false)
 
   app.press(stroke)
-  app.press({ key: 'd' })
-  app.press({ key: 'q' })
-  app.press({ key: 'a' })
+  app.type('dqa')
   check('a loose subsequence still finds the row', app.palette().rows, ['dsh-quick-actions'])
   app.press({ key: 'Escape' })
   check('Escape closes the palette', app.palette().open, false)
   check('Escape releases the keyboard', app.press({ key: 'd' }).defaultPrevented, false)
 
   app.press(stroke)
-  app.press({ key: 's' })
-  app.press({ key: 'e' })
-  app.press({ key: 'l' })
+  app.type('sel')
   check('filtering by an infix drops the others', app.palette().rows, ['seller-fe-admin'])
   check('ArrowDown is consumed', app.press({ key: 'ArrowDown' }).defaultPrevented, true)
   check('a one-row list keeps its highlight', app.palette().active, 0)
@@ -373,27 +483,14 @@ const stroke = { key: 'N', code: 'KeyN', meta: true, shift: true }
   check('the highlighted row is the one that opened', app.opened[app.opened.length - 1], ['open', 'w-seller'])
 
   app.press(stroke)
-  app.press({ key: 'z' })
-  app.press({ key: 'z' })
-  app.press({ key: 'z' })
+  app.type('zzz')
   check('a query that matches nothing shows no rows', app.palette().rows, [])
   app.press({ key: 'Enter' })
   await tick()
   check('Enter on an empty result does nothing', app.opened.length, 2)
-  check('Backspace is consumed', app.press({ key: 'Backspace' }).defaultPrevented, true)
-  app.press({ key: 'Backspace', meta: true })
-  check('clearing restores every row', app.palette().rows.length, WORKSPACES.length)
-
-  check('End moves to the last row', (app.press({ key: 'End' }), app.palette().active), WORKSPACES.length - 1)
-  check('Home returns to the first row', (app.press({ key: 'Home' }), app.palette().active), 0)
-
-  const paste = app.press({ key: 'v', meta: true })
-  check('the paste stroke is left to the browser', paste.defaultPrevented, false)
-  check('the paste stroke is kept from app shortcuts', paste.stopped, true)
-  const selectAll = app.press({ key: 'a', meta: true })
-  check('select-all stays inside the palette', selectAll.defaultPrevented, true)
   app.press({ key: 'Escape' })
-  check('Escape closes after a paste stroke', app.palette().open, false)
+  check('Escape closes after a failed query', app.palette().open, false)
+
   check('a bare modifier is inert when closed', app.press({ key: 'Shift', shift: true }).defaultPrevented, false)
 
   // A stroke the user recorded earlier outranks the default the update added.
