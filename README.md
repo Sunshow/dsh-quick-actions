@@ -2,14 +2,14 @@
 
 # dsh-quick-actions
 
-**Keyboard shortcuts for DeepSeek Harness — pull the latest code, run your own shell commands, and open the action menu from the composer, on any screen.**
+**Keyboard shortcuts for DeepSeek Harness — pull the latest code, start a session in the workspace you pick, run your own shell commands, and open the action menu from the composer, on any screen.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f7dd1.svg)](LICENSE)
 ![Platform: DSH Web / Desktop](https://img.shields.io/badge/DSH-web%20%7C%20desktop-1f2937.svg)
 
 </div>
 
-> **中文简介**：给 DSH 用的快捷键插件。在任意界面（包括新会话页）按一下就能拉取当前工作区的代码，也可以自己添加任意 shell 命令并绑定快捷键；输入框左边还有一个可点击的入口，点开就是分组动作菜单。快捷键和自定义命令都在设置里维护，存在浏览器本地。
+> **中文简介**：给 DSH 用的快捷键插件。在任意界面（包括新会话页）按一下就能拉取当前工作区的代码、或者选一个工作区直接开新会话；也可以自己添加任意 shell 命令并绑定快捷键；输入框左边还有一个可点击的入口，点开就是分组动作菜单。快捷键和自定义命令都在设置里维护，存在浏览器本地。
 
 ![architecture](docs/architecture.svg)
 
@@ -28,6 +28,7 @@ DSH is keyboard-driven, but running something against *the current workspace* �
 
 - **Global shortcuts.** A capture-phase `keydown` listener runs while the caret sits in the composer: plain typing stays with the field, while any `Mod` / `Ctrl` / `Alt` combination is treated as a command.
 - **Default binding `⌘⇧P`** (`Ctrl+Shift+P` elsewhere) → `git pull --ff-only` in the current workspace, result in a transient notice. It follows the git-GUI "pull" convention and avoids the browser-reserved `⌘T` / `⌘⇧T` / `⌘W`.
+- **Workspace picker on `⌘⇧N`.** Opens from any screen — New Session, a running conversation, even behind an open Settings dialog, because the palette is portalled to `document.body` rather than the slot layer (`shell.overlay` is a `z-index:20` stacking context, so a slot-mounted overlay would paint under any dialog). Type to filter, `↑` `↓` to move, `Enter` starts a session in the highlighted workspace. Typed keys are read as plain letters, so the search behaves as if the input method were in its English state (see [Workspace picker](#workspace-picker)).
 - **Clickable entry point.** A keycap button in the composer tool row opens the same grouped actions — one click instead of a keypress — and shows which directory the run will use.
 - **Grouped settings page** (`Settings → Quick actions`): Git, Session & layout, and your own **Custom commands** group, each row with a recordable shortcut chip, reset, edit and delete.
 - **Custom commands.** Add a name plus a shell line; it is immediately available in the menu and can be bound to any combination. Runs through a **login shell**, so `nvm` / Homebrew / `pyenv` PATH entries are available.
@@ -39,7 +40,7 @@ DSH is keyboard-driven, but running something against *the current workspace* �
 ## Requirements
 
 - DeepSeek Harness with the Web UI (`dsh web`, the Desktop app, or any profile that mounts `@deepseek-ai/dsh-web-app`).
-- Tested against **DSH 0.2.2-rc.1** (the client slot ids and service shapes used here are stable across 0.2.x).
+- Tested against **DSH 0.2.2-rc.3** (the client slot ids and service shapes used here are stable across 0.2.x).
 
 ## Install
 
@@ -62,10 +63,35 @@ After installing, refresh the page once (the Client half is loaded at boot) and 
 | Where | What |
 | --- | --- |
 | Any screen | Press a bound shortcut, e.g. `⌘⇧P` |
+| Any screen | `⌘⇧N` (`Ctrl+Shift+N`) → workspace picker → `Enter` starts a session there |
 | Composer tool row | Click the keycap button → grouped action menu |
 | Settings → Quick actions | Record, reset, add or edit actions |
 
 Recording a shortcut: click the chip, press the combination (`Esc` cancels, `Backspace` clears). A combination already used by another action is taken over and the previous owner is unbound with a notice.
+
+### Workspace picker
+
+`⌘⇧N` opens a palette over whatever is on screen:
+
+| Key | Action |
+| --- | --- |
+| type | Filter by workspace title, then directory name, then full path |
+| `↑` `↓` / `Tab` / `Shift+Tab` | Move the highlight |
+| `Home` `End` / `PageUp` `PageDown` | Jump to the first, last, or five rows away |
+| `Enter` | Open (or reuse the draft of) a blank session in that workspace |
+| `⌘V` / `Ctrl+V` | Paste a name — the way to search a non-ASCII directory name |
+| `⌘C` / `Ctrl+C` | Copy, as usual (select-all and cut stay inside the palette) |
+| `Esc` / click outside | Close |
+
+A pick reports its outcome only once `uiWorkspace.openWorkspace` settles, so a refused request says so instead of claiming success.
+
+A web page cannot switch the operating system's input method, so the palette sidesteps the question instead of guessing at it: the search field does not handle typing itself. The palette reads each keystroke from the `keydown` event and appends it to the query, so typing behaves as if the input method were in its English state — a Chinese, Japanese or Korean input method left active cannot turn the search into a candidate window, and filtering is never a keystroke behind.
+
+When that key reports no letter of its own — an input method consumed it (`key: "Process"`) or the layout is not Latin (a Cyrillic `ф`) — the palette falls back to the physical key (`code`) and takes the letter printed on it, so a keyboard laid out in another script still searches by the Latin spelling of a directory name. `⌘V` remains the way to paste a name that is not Latin at all.
+
+Because the palette is mounted on `document.body` above every body-portalled dialog, it stays visible and usable with Settings or a primitive `Modal` open; closing it hands the caret back to the field it took it from.
+
+Pressing `⌘⇧N` again does not re-open the palette; `Esc` closes it first. Because `⌘⇧N` is Chrome's *New Incognito Window* shortcut, a **web** tab hands the stroke to the browser and the page never sees it — use the Desktop app, or record another combination on `Settings → Quick actions`. The settings page's key probe shows whether a combination reaches the page at all.
 
 ### Custom commands
 
@@ -84,6 +110,7 @@ Save, then click its chip to bind a combination. The item appears in the action 
 | --- | --- | --- |
 | Pull latest code | `⌘⇧P` / `Ctrl+Shift+P` | `git pull --ff-only` |
 | Fetch remote updates | — | `git fetch --all --prune` |
+| New session in a workspace | `⌘⇧N` / `Ctrl+Shift+N` | Client-side: workspace picker |
 | New session | — | Client-side |
 | Toggle sidebar | — | Client-side |
 
@@ -92,7 +119,7 @@ Save, then click its chip to bind a combination. The item appears in the action 
 | File | Role |
 | --- | --- |
 | `index.js` | Host half: action catalog, `/api/quick-actions/catalog`, `/api/quick-actions/run`, directory guard, `git` + custom-command execution |
-| `client.js` | Browser half: keydown listener, composer button + menu, settings page, key probe, notice |
+| `client.js` | Browser half: keydown listener, workspace picker (portalled to `document.body`), composer button + menu, settings page, key probe, notice |
 | `cordis.patch.yml` | Inserts the `quick-actions` Host row |
 | `locale/*.json`, `icon.svg` | Plugin Manager metadata |
 
@@ -145,7 +172,13 @@ plugin_manager action=set_plugin target=include:quick-actions enabled=true
 # Client change (client.js): refresh the page
 ```
 
-`node --check index.js client.js` before shipping.
+`node --check index.js client.js` before shipping, then run the smoke test:
+
+```bash
+node test/client-flow.test.cjs   # or: npm test
+```
+
+It builds a throwaway window/React host around the real `client.js` and drives the palette through the listener the plugin installs — default stroke, capture of typed keys, the physical-key fallback, ranking, `Enter`/`Escape`, `Home`/`End`, the paste pass-through, a recorded binding outranking a new default, and both fixed layers reaching `document.body` — without a browser or a rendering layer.
 
 ## License
 

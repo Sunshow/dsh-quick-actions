@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Quick actions",
-    "description": "Run workspace actions such as pulling the latest code from a keyboard shortcut on any screen, with grouped shortcut settings."
+    "description": "Run workspace actions such as pulling the latest code or starting a session in a workspace you pick, from a keyboard shortcut on any screen, with grouped shortcut settings."
   }
 }

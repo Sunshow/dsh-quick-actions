@@ -18,9 +18,21 @@ window.__ModuleLoader__.load({
 
     const React = require('react');
     const h = React.createElement;
+    // Overlays are painted from document.body. The `shell.overlay` slot is a
+    // z-index:20 stacking context, so anything mounted inside it renders under
+    // a body-portalled dialog (Settings, the Modal primitive, menus) no matter
+    // its own z-index -- and a picker nobody can see would still eat the keys.
+    let createPortal = null;
+    try {
+      const ReactDOM = require('react-dom');
+      if (ReactDOM && typeof ReactDOM.createPortal === 'function') createPortal = ReactDOM.createPortal;
+    } catch (error) {
+      /* a host without react-dom keeps the in-slot fallback below */
+    }
     const {
       useCallback,
       useEffect,
+      useMemo,
       useRef,
       useState,
     } = React;
@@ -107,6 +119,21 @@ window.__ModuleLoader__.load({
         'notice.noService': '当前界面不支持该操作',
         'notice.unknownAction': '未知的操作',
         'notice.done': '已执行',
+        'notice.sessionInWorkspace': '打开新会话 · {name}',
+        'notice.openingSession': '正在打开 · {name}',
+        'picker.title': '在指定工作区新建会话',
+        'picker.placeholder': '输入以搜索工作区…',
+        'picker.counter': '{count} / {total} 个工作区',
+        'picker.current': '当前',
+        'picker.defaultWorkspace': '默认工作区',
+        'picker.sessions': '{count} 个会话',
+        'picker.empty': '没有匹配的工作区',
+        'picker.emptyHint': '直接键入即可搜索；中文目录名可以粘贴。',
+        'picker.noWorkspaces': '还没有登记任何工作区，请先在侧栏添加一个',
+        'picker.loading': '正在读取工作区…',
+        'picker.loadError': '读取工作区列表失败，请稍后重试',
+        'picker.footHint': '↑↓ 选择 · ↵ 新建会话 · Esc 取消',
+        'picker.imeNote': '直接键入即可搜索 · 等同英文输入态',
       },
       en: {
         'page.title': 'Quick actions',
@@ -148,6 +175,21 @@ window.__ModuleLoader__.load({
         'notice.noService': 'This action is unavailable in the current view',
         'notice.unknownAction': 'Unknown action',
         'notice.done': 'Ran',
+        'notice.sessionInWorkspace': 'New session · {name}',
+        'notice.openingSession': 'Opening · {name}',
+        'picker.title': 'New session in a workspace',
+        'picker.placeholder': 'Type to search workspaces…',
+        'picker.counter': '{count} / {total} workspaces',
+        'picker.current': 'Current',
+        'picker.defaultWorkspace': 'Default workspace',
+        'picker.sessions': '{count} sessions',
+        'picker.empty': 'No workspace matches',
+        'picker.emptyHint': 'Type to search; a non-ASCII name can be pasted.',
+        'picker.noWorkspaces': 'No workspace registered yet — add one from the sidebar first',
+        'picker.loading': 'Loading workspaces…',
+        'picker.loadError': 'Could not read the workspace list — try again',
+        'picker.footHint': '↑↓ select · ↵ new session · Esc cancel',
+        'picker.imeNote': 'Type to search — keys bypass the input method',
       },
     };
 
@@ -191,6 +233,13 @@ window.__ModuleLoader__.load({
           this.set(Object.assign({}, value, partial));
         },
       };
+    }
+
+    /** Mount a frame-wide layer on document.body; fall back to the slot itself. */
+    function portalLayer(element) {
+      if (createPortal === null) return element;
+      if (typeof document === 'undefined' || !document.body) return element;
+      return createPortal(element, document.body);
     }
 
     function readSnapshot(source) {
@@ -388,6 +437,94 @@ window.__ModuleLoader__.load({
       return index === -1 ? trimmed : trimmed.slice(index + 1);
     }
 
+    /* ------------------------------------------------------ workspace search */
+
+    const PICKER_QUERY_MAX = 120;
+    const PICKER_PAGE_SIZE = 5;
+    // The first-use Workspace carries a language-neutral directory name as its
+    // stored title; DSH labels it with the localized default name instead.
+    const DEFAULT_WORKSPACE_TITLE = 'default-workspace';
+
+    function isSubsequence(haystack, needle) {
+      if (needle === '') return true;
+      let index = 0;
+      for (let position = 0; position < haystack.length && index < needle.length; position += 1) {
+        if (haystack.charAt(position) === needle.charAt(index)) index += 1;
+      }
+      return index === needle.length;
+    }
+
+    /**
+     * Rank one workspace against the typed query: `[field, kind, position, length]`
+     * or null when the row is filtered out. The title is what the user reads, so
+     * it outranks the directory name, which outranks the full path; inside one
+     * field a prefix beats an infix, which beats a loose subsequence.
+     *
+     * The loose subsequence is limited to the short fields on purpose: a path is
+     * long enough that almost any three letters appear in order somewhere along
+     * it, which would make every row match every query.
+     */
+    function fieldMatch(value, needle, allowSubsequence) {
+      const at = value.indexOf(needle);
+      if (at === 0) return [0, 0, value.length];
+      if (at > 0) return [1, at, value.length];
+      if (allowSubsequence === true && isSubsequence(value, needle)) return [2, value.length, value.length];
+      return null;
+    }
+
+    function workspaceScore(workspace, query) {
+      const needle = String(query || '').trim().toLowerCase();
+      if (needle === '') return [0, 0, 0, 0];
+      const title = String((workspace && workspace.title) || '').toLowerCase();
+      const path = String((workspace && workspace.path) || '').toLowerCase();
+      const fields = [[title, true], [baseName(path), true], [path, false]];
+      for (let index = 0; index < fields.length; index += 1) {
+        const match = fieldMatch(fields[index][0], needle, fields[index][1]);
+        if (match === null) continue;
+        return [index, match[0], match[1], match[2]];
+      }
+      return null;
+    }
+
+    /** Filter and rank the workspace list for one query, keeping Host order among equals. */
+    function rankWorkspaces(items, query) {
+      const ranked = [];
+      (Array.isArray(items) ? items : []).forEach(function score(workspace, index) {
+        if (!workspace || typeof workspace.workspaceId !== 'string' || workspace.workspaceId === '') return;
+        const rank = workspaceScore(workspace, query);
+        if (rank === null) return;
+        ranked.push({ workspace, rank, index });
+      });
+      ranked.sort(function byRank(left, right) {
+        for (let position = 0; position < left.rank.length; position += 1) {
+          if (left.rank[position] !== right.rank[position]) return left.rank[position] - right.rank[position];
+        }
+        return left.index - right.index;
+      });
+      return ranked.map(function unwrap(entry) {
+        return entry.workspace;
+      });
+    }
+
+    /**
+     * The text one keystroke contributes to a query.
+     *
+     * A printable ASCII `key` is taken as typed. When an input method or a
+     * non-Latin keyboard layout has consumed it (`key: 'Process'`, or a Cyrillic
+     * letter), the physical `code` supplies the letter printed on that key, so
+     * leaning on the keyboard still searches by its Latin spelling.
+     */
+    function printableKey(event) {
+      const key = event.key;
+      if (typeof key === 'string' && key.length === 1 && key >= ' ' && key <= '~') return key;
+      const code = String(event.code || '');
+      const letter = /^Key([A-Z])$/.exec(code);
+      if (letter !== null) return letter[1].toLowerCase();
+      const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
+      if (digit !== null) return digit[1];
+      return null;
+    }
+
     function isEditableTarget(target) {
       if (!target || typeof target !== 'object') return false;
       const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
@@ -414,11 +551,16 @@ window.__ModuleLoader__.load({
     }
 
     function findActionByShortcut(actions, overrides, shortcut) {
+      // A binding the user recorded outranks a default: adding a default must
+      // never silently take the stroke away from an action someone bound before.
+      let byDefault = null;
       for (let index = 0; index < actions.length; index += 1) {
         const action = actions[index];
-        if (effectiveShortcut(action, overrides) === shortcut) return action;
+        if (effectiveShortcut(action, overrides) !== shortcut) continue;
+        if (Object.prototype.hasOwnProperty.call(overrides, action.id)) return action;
+        if (byDefault === null) byDefault = action;
       }
-      return null;
+      return byDefault;
     }
 
     /* ------------------------------------------------------------- service */
@@ -433,6 +575,8 @@ window.__ModuleLoader__.load({
       const noticeStore = createStore(null);
       const menuStore = createStore({ open: false, anchor: null });
       const probeStore = createStore(null);
+      // Workspace picker: open flag, the typed (ASCII) query and the highlighted row.
+      const pickerStore = createStore({ open: false, query: '', index: 0 });
 
       let capturing = false;
       let noticeTimer = 0;
@@ -624,6 +768,216 @@ window.__ModuleLoader__.load({
         return paths.length === 1 ? paths[0] : null;
       }
 
+      /** Which listed workspace owns the session on screen (empty when there is none). */
+      function currentWorkspaceIdOf(items) {
+        const sessionId = currentSessionId();
+        if (!sessionId) return '';
+        const rows = Array.isArray(items) ? items : [];
+        for (let index = 0; index < rows.length; index += 1) {
+          const row = rows[index];
+          if (row && Array.isArray(row.sessionIds) && row.sessionIds.indexOf(sessionId) !== -1) {
+            return row.workspaceId;
+          }
+        }
+        return '';
+      }
+
+      /** The name a workspace row shows: its title, or the localized default. */
+      function workspaceLabel(workspace) {
+        const stored = pickText(workspace && workspace.title, activeLocaleId());
+        if (typeof stored === 'string' && stored !== '') {
+          return stored === DEFAULT_WORKSPACE_TITLE ? t('picker.defaultWorkspace') : stored;
+        }
+        return baseName((workspace && workspace.path) || '');
+      }
+
+      /* ---------------------------------------------------- workspace picker */
+
+      // Where the caret was before the palette took the keyboard, so cancelling
+      // puts the user back in the composer instead of on a bare body.
+      let focusBeforePicker = null;
+
+      function openWorkspacePicker() {
+        closeMenu();
+        const active = document.activeElement;
+        focusBeforePicker = active && active !== document.body ? active : null;
+        pickerStore.set({ open: true, query: '', index: 0 });
+      }
+
+      function closeWorkspacePicker(restoreFocus) {
+        const state = pickerStore.getSnapshot();
+        if (!state || !state.open) return;
+        const previous = focusBeforePicker;
+        focusBeforePicker = null;
+        pickerStore.set({ open: false, query: '', index: 0 });
+        // A pick navigates elsewhere, so only a cancel hands the caret back.
+        if (restoreFocus !== true || previous === null) return;
+        if (!document.contains(previous) || typeof previous.focus !== 'function') return;
+        window.setTimeout(function restoreCaret() {
+          try {
+            previous.focus({ preventScroll: true });
+          } catch (error) {
+            /* the field may have been unmounted while the palette was open */
+          }
+        }, 0);
+      }
+
+      function pickerCandidates(query) {
+        return rankWorkspaces(workspaceItems().items, query);
+      }
+
+      function setPickerQuery(query) {
+        const state = pickerStore.getSnapshot();
+        const next = String(query === null || query === undefined ? '' : query).slice(0, PICKER_QUERY_MAX);
+        if (next === state.query) return;
+        pickerStore.set(Object.assign({}, state, { query: next, index: 0 }));
+      }
+
+      function movePickerCursor(delta) {
+        const state = pickerStore.getSnapshot();
+        const list = pickerCandidates(state.query);
+        if (list.length === 0) return;
+        const stepped = (((state.index + delta) % list.length) + list.length) % list.length;
+        if (stepped === state.index) return;
+        pickerStore.set(Object.assign({}, state, { index: stepped }));
+      }
+
+      /** Jump to an absolute row (Home / End / paging), clamped to the list. */
+      function setPickerCursor(index) {
+        const state = pickerStore.getSnapshot();
+        const list = pickerCandidates(state.query);
+        if (list.length === 0) return;
+        const next = Math.min(Math.max(index, 0), list.length - 1);
+        if (next === state.index) return;
+        pickerStore.set(Object.assign({}, state, { index: next }));
+      }
+
+      function commitWorkspacePicker(workspace) {
+        if (!workspace) return;
+        closeWorkspacePicker(false);
+        const name = workspaceLabel(workspace) || workspace.workspaceId;
+        const uiWorkspace = ctx.get('uiWorkspace');
+        if (!uiWorkspace || (typeof uiWorkspace.openWorkspace !== 'function' && typeof uiWorkspace.startSession !== 'function')) {
+          notice({ kind: 'error', title: t('notice.noService') });
+          return;
+        }
+        if (typeof uiWorkspace.openWorkspace !== 'function') {
+          // An older Host can only fire and forget, so nothing can be reported.
+          try {
+            uiWorkspace.startSession(workspace.workspaceId);
+            notice({ kind: 'ok', title: t('notice.sessionInWorkspace', { name }) });
+          } catch (error) {
+            notice({ kind: 'error', title: t('notice.error') + ' · ' + name, detail: describeError(error) });
+          }
+          return;
+        }
+        // openWorkspace connects the workspace and opens its blank session --
+        // the draft the Host already keeps for it, never a second empty one.
+        notice({ kind: 'pending', title: t('notice.openingSession', { name }) });
+        Promise.resolve()
+          .then(function open() {
+            return uiWorkspace.openWorkspace(workspace.workspaceId);
+          })
+          .then(function opened() {
+            notice({ kind: 'ok', title: t('notice.sessionInWorkspace', { name }) });
+          })
+          .catch(function failed(error) {
+            notice({ kind: 'error', title: t('notice.error') + ' · ' + name, detail: describeError(error) });
+          });
+      }
+
+      function describeError(error) {
+        return String((error && error.message) || error);
+      }
+
+      function selectCurrentPickerWorkspace() {
+        const state = pickerStore.getSnapshot();
+        const list = pickerCandidates(state.query);
+        if (list.length === 0) return;
+        commitWorkspacePicker(list[Math.min(Math.max(state.index, 0), list.length - 1)]);
+      }
+
+      // Paste and copy are the one thing the palette leaves to the browser: a
+      // pasted name is how a workspace written in another script is searched.
+      // Select-all and cut stay blocked, so the caret never leaves the end and
+      // typing can never leave a stale selection behind.
+      function isClipboardShortcut(event) {
+        if (!(IS_MAC ? event.metaKey : event.ctrlKey) || event.altKey) return false;
+        const key = String(event.key || '').toLowerCase();
+        return key === 'v' || key === 'c';
+      }
+
+      function pasteIntoQuery(event) {
+        const clipboard = event.clipboardData || window.clipboardData;
+        if (!clipboard || typeof clipboard.getData !== 'function') return;
+        event.preventDefault();
+        const text = String(clipboard.getData('text') || '').replace(/\s+/g, ' ');
+        if (text === '') return;
+        setPickerQuery(pickerStore.getSnapshot().query + text);
+      }
+
+      /**
+       * The palette owns the keyboard while it is open. Printable keys are read
+       * from the event itself and the native input never sees them, so typing
+       * behaves as if the input method were in its English state — a web page
+       * cannot switch the OS input method, this sidesteps it instead.
+       */
+      function handlePickerKey(event) {
+        if (isClipboardShortcut(event)) {
+          // Let the default action reach the field, but keep the app from
+          // treating the same stroke as its own shortcut.
+          event.stopPropagation();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.isComposing) return;
+
+        const state = pickerStore.getSnapshot();
+        const key = event.key;
+        if (key === 'Escape') {
+          closeWorkspacePicker(true);
+          return;
+        }
+        if (key === 'ArrowDown' || key === 'Tab') {
+          movePickerCursor(event.shiftKey ? -1 : 1);
+          return;
+        }
+        if (key === 'ArrowUp') {
+          movePickerCursor(-1);
+          return;
+        }
+        if (key === 'PageDown') {
+          setPickerCursor(state.index + PICKER_PAGE_SIZE);
+          return;
+        }
+        if (key === 'PageUp') {
+          setPickerCursor(state.index - PICKER_PAGE_SIZE);
+          return;
+        }
+        if (key === 'Home') {
+          setPickerCursor(0);
+          return;
+        }
+        if (key === 'End') {
+          setPickerCursor(pickerCandidates(state.query).length - 1);
+          return;
+        }
+        if (key === 'Enter') {
+          selectCurrentPickerWorkspace();
+          return;
+        }
+        if (key === 'Backspace') {
+          if (event.metaKey || event.ctrlKey || event.altKey) setPickerQuery('');
+          else setPickerQuery(state.query.slice(0, -1));
+          return;
+        }
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const text = printableKey(event);
+        if (text === null) return;
+        setPickerQuery(state.query + text);
+      }
+
       /* ------------------------------------------------------------ catalog */
 
       let catalogLoading = false;
@@ -655,6 +1009,15 @@ window.__ModuleLoader__.load({
 
       function runClientAction(action) {
         const target = action.clientAction;
+        if (target === 'session.newInWorkspace') {
+          const uiWorkspace = ctx.get('uiWorkspace');
+          if (!uiWorkspace || typeof uiWorkspace.startSession !== 'function') {
+            return { ok: false, error: t('notice.noService') };
+          }
+          openWorkspacePicker();
+          // The palette is the feedback; a "done" notice would cover it.
+          return { ok: true, silent: true, output: '' };
+        }
         if (target === 'session.new') {
           const uiWorkspace = ctx.get('uiWorkspace');
           if (uiWorkspace && typeof uiWorkspace.startSession === 'function') {
@@ -686,6 +1049,7 @@ window.__ModuleLoader__.load({
         if (action.target === 'client') {
           const result = runClientAction(action);
           running = false;
+          if (result.ok && result.silent) return;
           notice({
             kind: result.ok ? 'ok' : 'error',
             title: result.ok ? t('notice.done') + ' · ' + title : title,
@@ -751,6 +1115,12 @@ window.__ModuleLoader__.load({
 
       ctx.effect(function installKeydown() {
         function onKeyDown(event) {
+          // The picker is modal: every stroke belongs to it until it closes,
+          // including the one that would otherwise open it again.
+          if (pickerStore.getSnapshot().open) {
+            handlePickerKey(event);
+            return;
+          }
           if (capturing) return;
           if (event.isComposing || event.repeat) return;
           if (event.key === 'Escape') {
@@ -823,7 +1193,7 @@ window.__ModuleLoader__.load({
           const noticeState = useSyncExternalStore(noticeStore.subscribe, noticeStore.getSnapshot, noticeStore.getSnapshot);
           if (!noticeState) return null;
           const kind = noticeState.kind || 'ok';
-          return h('div', { className: 'qa-notice-layer', 'aria-live': 'polite' },
+          return portalLayer(h('div', { className: 'qa-notice-layer', 'aria-live': 'polite' },
             h('div', {
               className: 'qa-notice qa-notice--' + kind,
               role: 'status',
@@ -843,7 +1213,7 @@ window.__ModuleLoader__.load({
               noticeState.detail ? h('pre', { className: 'qa-notice__detail' }, noticeState.detail) : null,
               noticeState.meta ? h('div', { className: 'qa-notice__meta' }, noticeState.meta) : null,
             ),
-          );
+          ));
         });
       });
 
@@ -1275,6 +1645,211 @@ window.__ModuleLoader__.load({
         });
       });
 
+      ctx.slots.inject('shell.overlay', function () {
+        return ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'quick-actions.workspace-picker',
+          order: 62,
+        }, function QuickActionsWorkspacePicker() {
+          const state = useSyncExternalStore(pickerStore.subscribe, pickerStore.getSnapshot, pickerStore.getSnapshot);
+          const catalogState = useSyncExternalStore(catalogStore.subscribe, catalogStore.getSnapshot, catalogStore.getSnapshot);
+
+          // The workspace list is a Host follow generation: subscribe so a
+          // workspace added, renamed or removed elsewhere shows up live.
+          const workspaces = ctx.get('workspaces');
+          const workspaceSource = workspaces && workspaces.list;
+          const subscribeWorkspaces = useMemo(function () {
+            if (!workspaceSource || typeof workspaceSource.subscribe !== 'function') {
+              return function idleSubscribe() { return function idleUnsubscribe() {}; };
+            }
+            return function subscribeWorkspaceSource(listener) {
+              return workspaceSource.subscribe(listener);
+            };
+          }, [workspaceSource]);
+          const readWorkspaces = useMemo(function () {
+            if (!workspaceSource || typeof workspaceSource.getSnapshot !== 'function') {
+              return function emptyWorkspaceSnapshot() { return null; };
+            }
+            return function readWorkspaceSource() {
+              return workspaceSource.getSnapshot();
+            };
+          }, [workspaceSource]);
+          const workspaceSnapshot = useSyncExternalStore(subscribeWorkspaces, readWorkspaces, readWorkspaces);
+
+          const inputRef = useRef(null);
+          const listRef = useRef(null);
+          const open = Boolean(state && state.open);
+          const query = (state && state.query) || '';
+
+          useEffect(function focusSearchOnOpen() {
+            if (!open) return undefined;
+            const input = inputRef.current;
+            if (!input || typeof input.focus !== 'function') return undefined;
+            try {
+              input.focus({ preventScroll: true });
+              const end = typeof input.value === 'string' ? input.value.length : 0;
+              input.setSelectionRange(end, end);
+            } catch (error) {
+              /* focus is best effort: the window listener owns the keys anyway */
+            }
+            return undefined;
+          }, [open]);
+
+          useEffect(function releaseOnUnmount() {
+            if (!open) return undefined;
+            // A reload that drops this occupant while the palette is open must
+            // not leave the frame-wide listener swallowing every keystroke.
+            return function closeOnUnmount() {
+              closeWorkspacePicker(false);
+            };
+          }, [open]);
+
+          useEffect(function revealActiveRow() {
+            if (!open) return undefined;
+            const list = listRef.current;
+            if (!list || typeof list.querySelector !== 'function') return undefined;
+            const active = list.querySelector('.qa-pick--active');
+            if (active && typeof active.scrollIntoView === 'function') {
+              try {
+                active.scrollIntoView({ block: 'nearest' });
+              } catch (error) {
+                /* a detached row or an exotic layout: scrolling is cosmetic */
+              }
+            }
+            return undefined;
+          }, [open, state && state.index, query]);
+
+          if (!open) return null;
+
+          const localeId = activeLocaleId();
+          const allWorkspaces = workspaceSnapshot && Array.isArray(workspaceSnapshot.items)
+            ? workspaceSnapshot.items
+            : workspaceItems().items;
+          const listFailed = Boolean(workspaceSnapshot && workspaceSnapshot.error);
+          const phase = workspaceSnapshot && workspaceSnapshot.phase;
+          const candidates = rankWorkspaces(allWorkspaces, query);
+          const activeIndex = candidates.length === 0
+            ? -1
+            : Math.min(Math.max(state.index, 0), candidates.length - 1);
+          const currentId = currentWorkspaceIdOf(allWorkspaces);
+
+          const catalog = mergeCatalog(catalogState.catalog, catalogState.custom);
+          const pickerAction = catalog && Array.isArray(catalog.actions)
+            ? catalog.actions.filter(function isPickerAction(action) {
+              return action.clientAction === 'session.newInWorkspace';
+            })[0]
+            : null;
+          const shortcut = pickerAction
+            ? effectiveShortcut(pickerAction, catalogState.overrides || {})
+            : '';
+
+          let body;
+          if (allWorkspaces.length === 0) {
+            body = h('div', { className: 'qa-palette__empty', role: 'status' },
+              listFailed ? t('picker.loadError') : phase === 'pending' ? t('picker.loading') : t('picker.noWorkspaces'));
+          } else if (candidates.length === 0) {
+            body = h('div', { className: 'qa-palette__empty', role: 'status' },
+              h('div', null, t('picker.empty')),
+              h('div', { className: 'qa-palette__empty-hint' }, t('picker.emptyHint')));
+          } else {
+            body = candidates.map(function renderWorkspace(workspace, rowIndex) {
+              const sessionCount = Array.isArray(workspace.sessionIds) ? workspace.sessionIds.length : 0;
+              return h('div', {
+                key: workspace.workspaceId,
+                id: 'qa-palette-option-' + rowIndex,
+                role: 'option',
+                tabIndex: -1,
+                'aria-selected': rowIndex === activeIndex ? 'true' : 'false',
+                className: 'qa-pick' + (rowIndex === activeIndex ? ' qa-pick--active' : ''),
+                title: workspace.path || '',
+                onMouseEnter: function highlight() {
+                  const current = pickerStore.getSnapshot();
+                  if (current.open && current.index !== rowIndex) {
+                    pickerStore.set(Object.assign({}, current, { index: rowIndex }));
+                  }
+                },
+                onClick: function choose() {
+                  commitWorkspacePicker(workspace);
+                },
+              },
+                h('span', { className: 'qa-pick__title' }, workspaceLabel(workspace)),
+                workspace.workspaceId === currentId
+                  ? h('span', { className: 'qa-pick__badge' }, t('picker.current'))
+                  : null,
+                h('span', { className: 'qa-pick__path' }, workspace.path || ''),
+                h('span', { className: 'qa-pick__sessions' }, t('picker.sessions', { count: sessionCount })),
+              );
+            });
+          }
+
+          return portalLayer(h('div', {
+            className: 'qa-palette-layer',
+            // Pressing the field clears nothing; keeping focus on the input is
+            // what lets the next keystroke keep filtering after a mouse click.
+            onMouseDown: function onBackdrop(event) {
+              event.preventDefault();
+              if (event.target === event.currentTarget) closeWorkspacePicker(true);
+            },
+          },
+            h('div', {
+              className: 'qa-palette',
+              role: 'dialog',
+              'aria-modal': 'true',
+              'aria-label': t('picker.title'),
+              'data-shortcut-modal': 'quick-actions',
+            },
+              h('div', { className: 'qa-palette__head' },
+                h('span', { className: 'qa-palette__head-title' }, t('picker.title')),
+                shortcut === ''
+                  ? null
+                  : h('span', { className: 'qa-palette__keys' }, renderShortcutChips(shortcut, '')),
+              ),
+              h('div', { className: 'qa-palette__search' },
+                h('span', { className: 'qa-palette__prompt', 'aria-hidden': true }, '›'),
+                h('input', {
+                  ref: inputRef,
+                  className: 'qa-palette__input',
+                  type: 'text',
+                  value: query,
+                  placeholder: t('picker.placeholder'),
+                  'aria-label': t('picker.placeholder'),
+                  role: 'combobox',
+                  'aria-expanded': 'true',
+                  'aria-autocomplete': 'list',
+                  'aria-controls': 'qa-palette-list',
+                  'aria-activedescendant': activeIndex < 0 ? undefined : 'qa-palette-option-' + activeIndex,
+                  autoComplete: 'off',
+                  autoCorrect: 'off',
+                  autoCapitalize: 'off',
+                  spellCheck: false,
+                  lang: 'en',
+                  inputMode: 'text',
+                  onChange: function syncQuery(event) {
+                    setPickerQuery(event.target.value);
+                  },
+                  onPaste: pasteIntoQuery,
+                }),
+                allWorkspaces.length === 0
+                  ? null
+                  : h('span', { className: 'qa-palette__count', 'aria-live': 'polite' },
+                    t('picker.counter', { count: candidates.length, total: allWorkspaces.length })),
+              ),
+              h('div', {
+                className: 'qa-palette__list',
+                id: 'qa-palette-list',
+                ref: listRef,
+                role: 'listbox',
+                'aria-label': t('picker.title'),
+              }, body),
+              h('div', { className: 'qa-palette__foot' },
+                h('span', { className: 'qa-palette__hint' }, t('picker.footHint')),
+                h('span', { className: 'qa-palette__ime' }, t('picker.imeNote')),
+              ),
+            ),
+          ));
+        });
+      });
+
       ctx.slots.inject('settings.section.icon', function () {
         return ctx.slots.register({
           name: 'settings.section.icon',
@@ -1369,7 +1944,7 @@ window.__ModuleLoader__.load({
       '.qa-footer__button { flex: none; padding: 6px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }',
       '.qa-footer__button:hover { background: var(--dsw-alias-interactive-bg-hover); }',
       '.qa-footer__hint { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }',
-      '.qa-notice-layer { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 40; display: flex; justify-content: center; pointer-events: none; width: min(560px, calc(100vw - 48px)); }',
+      '.qa-notice-layer { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 1300; display: flex; justify-content: center; pointer-events: none; width: min(560px, calc(100vw - 48px)); }',
       '.qa-notice { animation: qa-notice-in 140ms ease-out; pointer-events: auto; display: flex; flex-direction: column; gap: 6px; min-width: 220px; max-width: 100%; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-overlay); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); }',
       '.qa-notice__head { display: flex; align-items: center; gap: 8px; }',
       '.qa-notice__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dsw-alias-state-idle-primary); }',
@@ -1381,6 +1956,29 @@ window.__ModuleLoader__.load({
       '.qa-notice__close:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }',
       '.qa-notice__detail { margin: 0; max-height: 148px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--dsw-alias-markdown-code-block); color: var(--dsw-alias-label-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 16px; white-space: pre-wrap; word-break: break-word; }',
       '.qa-notice__meta { font-size: 11px; color: var(--dsw-alias-label-tertiary); word-break: break-all; }',
+      '.qa-palette-layer { position: fixed; inset: 0; z-index: 1400; display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.28)); backdrop-filter: var(--dsw-mask-blur, none); pointer-events: auto; }',
+      '.qa-palette { display: flex; flex-direction: column; width: min(620px, 100%); max-height: min(70vh, 620px); overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 14px; background: var(--dsw-alias-bg-overlay); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32); animation: qa-palette-in 130ms ease-out; }',
+      '.qa-palette__head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 0; }',
+      '.qa-palette__head-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__keys { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__search { display: flex; align-items: center; gap: 8px; padding: 8px 14px 12px; border-bottom: 1px solid var(--dsw-alias-border-l1); }',
+      '.qa-palette__prompt { flex: none; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__input { flex: 1 1 auto; min-width: 0; padding: 0; border: none; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 15px; line-height: 22px; }',
+      '.qa-palette__input::placeholder { color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__count { flex: none; font-size: 11px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; }',
+      '.qa-palette__list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px; }',
+      '.qa-pick { display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 9px; color: var(--dsw-alias-label-primary); font: inherit; text-align: left; cursor: pointer; }',
+      '.qa-pick--active { background: var(--dsw-alias-interactive-bg-hover); }',
+      '.qa-pick__title { flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }',
+      '.qa-pick__badge { flex: none; padding: 0 6px; border-radius: 999px; background: var(--dsw-alias-button-tool-bar-fill); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; }',
+      '.qa-pick__path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-pick__sessions { flex: none; font-size: 11px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; }',
+      '.qa-palette__empty { padding: 20px 14px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); text-align: center; }',
+      '.qa-palette__empty-hint { margin-top: 4px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--dsw-alias-border-l1); font-size: 11px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__hint { flex: none; white-space: nowrap; }',
+      '.qa-palette__ime { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }',
+      '@keyframes qa-palette-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }',
       '@keyframes qa-notice-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }',
     ].join('\n');
 

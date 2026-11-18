@@ -71,6 +71,20 @@ const ACTION_DEFINITIONS = [
     command: { bin: 'git', args: ['fetch', '--all', '--prune'], timeoutMs: 120000 },
   },
   {
+    id: 'session.newInWorkspace',
+    group: 'session',
+    order: 5,
+    target: 'client',
+    clientAction: 'session.newInWorkspace',
+    title: { zh: '在指定工作区新建会话', en: 'New session in a workspace' },
+    hint: {
+      zh: '打开工作区选择面板：直接键入即可搜索（按键按英文字符读取，等同英文输入态），↑↓ 选择、Enter 在该工作区新建会话。浏览器标签页会抢占 ⌘⇧N，必要时可在此改绑',
+      en: 'Opens a workspace picker: type to search (keys are read as plain letters, bypassing the input method), ↑↓ to move, Enter creates a session there. A browser tab owns ⌘⇧N — rebind here when needed',
+    },
+    commandLabel: '',
+    defaultShortcut: { mac: 'Mod+Shift+N', other: 'Mod+Shift+N' },
+  },
+  {
     id: 'session.new',
     group: 'session',
     order: 10,
