@@ -6,6 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f7dd1.svg)](LICENSE)
 ![Platform: DSH Web / Desktop](https://img.shields.io/badge/DSH-web%20%7C%20desktop-1f2937.svg)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 </div>
 
