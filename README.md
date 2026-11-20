@@ -29,7 +29,7 @@ DSH is keyboard-driven, but running something against *the current workspace* �
 
 - **Global shortcuts.** A capture-phase `keydown` listener runs while the caret sits in the composer: plain typing stays with the field, while any `Mod` / `Ctrl` / `Alt` combination is treated as a command.
 - **Default binding `⌘⇧P`** (`Ctrl+Shift+P` elsewhere) → `git pull --ff-only` in the current workspace, result in a transient notice. It follows the git-GUI "pull" convention and avoids the browser-reserved `⌘T` / `⌘⇧T` / `⌘W`.
-- **Workspace picker on `⌘⇧N`.** Opens from any screen — New Session, a running conversation, even behind an open Settings dialog, because the palette is portalled to `document.body` rather than the slot layer (`shell.overlay` is a `z-index:20` stacking context, so a slot-mounted overlay would paint under any dialog). Type to filter, `↑` `↓` to move, `Enter` starts a session in the highlighted workspace. The search field is an ordinary text field: typing, an input method's composition, selection and caret movement all behave the way they do anywhere else (see [Workspace picker](#workspace-picker)).
+- **Workspace picker on `⌘⇧N`.** Opens from any screen — New Session, a running conversation, even behind an open Settings dialog, because the palette is portalled to `document.body` rather than the slot layer (`shell.overlay` is a `z-index:20` stacking context, so a slot-mounted overlay would paint under any dialog). Type to filter, `↑` `↓` to move, `Enter` starts a session in the highlighted workspace. By default the list is **most recently used first**; the button in the header toggles to **A→Z** and remembers the choice. The search field is an ordinary text field: typing, an input method's composition, selection and caret movement all behave the way they do anywhere else (see [Workspace picker](#workspace-picker)).
 - **Clickable entry point.** A keycap button in the composer tool row opens the same grouped actions — one click instead of a keypress — and shows which directory the run will use.
 - **Grouped settings page** (`Settings → Quick actions`): Git, Session & layout, and your own **Custom commands** group, each row with a recordable shortcut chip, reset, edit and delete.
 - **Custom commands.** Add a name plus a shell line; it is immediately available in the menu and can be bound to any combination. Runs through a **login shell**, so `nvm` / Homebrew / `pyenv` PATH entries are available.
@@ -90,7 +90,10 @@ Recording a shortcut: click the chip, press the combination (`Esc` cancels, `Bac
 | `Enter` | Open (or reuse the draft of) a blank session in that workspace |
 | `⌘V` / `Ctrl+V` | Paste a name — any script works |
 | `⌘C` / `Ctrl+C` | Copy the selected text, as usual |
+| Header **最近 / A→Z** button | Toggle recent-use and name order; the choice is remembered |
 | `Esc` / click outside | Close |
+
+By default the list is ordered **most recently used first**: the newest session activity in each workspace (the signal DSH itself uses for recency), with picks made in this palette counted as activity too, and the workspace's registration/update time as the fallback. The header button switches to A→Z and back. Typing still ranks exact and prefix matches ahead of the order; the chosen order breaks ties and controls the unfiltered list.
 
 A pick reports its outcome only once `uiWorkspace.openWorkspace` settles, so a refused request says so instead of claiming success.
 

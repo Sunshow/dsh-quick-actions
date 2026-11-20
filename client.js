@@ -54,6 +54,11 @@ window.__ModuleLoader__.load({
     const LAST_WORKSPACE_KEY = 'dsh.quick-actions.last-workspace.v1';
     const FALLBACK_KEY = 'dsh.quick-actions.fallback-directory.v1';
     const CUSTOM_KEY = 'dsh.quick-actions.custom-actions.v1';
+    const PICKER_SORT_KEY = 'dsh.quick-actions.picker-sort.v1';
+    const WORKSPACE_USAGE_KEY = 'dsh.quick-actions.workspace-usage.v1';
+    const WORKSPACE_USAGE_LIMIT = 200;
+    const PICKER_SORT_RECENT = 'recent';
+    const PICKER_SORT_ALPHA = 'alpha';
     const CUSTOM_GROUP = { id: 'custom', order: 30, title: { zh: '自定义命令', en: 'Custom commands' } };
     const CATALOG_URL = '/api/quick-actions/catalog';
     const RUN_URL = '/api/quick-actions/run';
@@ -133,6 +138,10 @@ window.__ModuleLoader__.load({
         'picker.loading': '正在读取工作区…',
         'picker.loadError': '读取工作区列表失败，请稍后重试',
         'picker.footHint': '↑↓ 选择 · ↵ 新建会话 · Esc 取消',
+        'picker.sort.recent': '最近',
+        'picker.sort.alpha': 'A→Z',
+        'picker.sort.switchToAlpha': '当前按最近使用排序，点击切换为 A→Z 排序',
+        'picker.sort.switchToRecent': '当前按 A→Z 排序，点击切换为最近使用排序',
       },
       en: {
         'page.title': 'Quick actions',
@@ -188,6 +197,10 @@ window.__ModuleLoader__.load({
         'picker.loading': 'Loading workspaces…',
         'picker.loadError': 'Could not read the workspace list — try again',
         'picker.footHint': '↑↓ select · ↵ new session · Esc cancel',
+        'picker.sort.recent': 'Recent',
+        'picker.sort.alpha': 'A→Z',
+        'picker.sort.switchToAlpha': 'Sorted by recent use. Click to sort A→Z.',
+        'picker.sort.switchToRecent': 'Sorted A→Z. Click to sort by recent use.',
       },
     };
 
@@ -358,6 +371,79 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Turn either a session's epoch millis or a workspace's ISO stamp into millis. */
+    function toTimestamp(value) {
+      if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0;
+      if (typeof value === 'string' && value !== '') {
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+      return 0;
+    }
+
+    function readPickerSort() {
+      try {
+        return window.localStorage.getItem(PICKER_SORT_KEY) === PICKER_SORT_ALPHA
+          ? PICKER_SORT_ALPHA
+          : PICKER_SORT_RECENT;
+      } catch (error) {
+        return PICKER_SORT_RECENT;
+      }
+    }
+
+    function writePickerSort(mode) {
+      try {
+        window.localStorage.setItem(PICKER_SORT_KEY, mode === PICKER_SORT_ALPHA ? PICKER_SORT_ALPHA : PICKER_SORT_RECENT);
+      } catch (error) {
+        /* private mode: the chosen order lasts for this page only */
+      }
+    }
+
+    /** Path → last time this browser picked the workspace in the palette. */
+    function readWorkspaceUsage() {
+      try {
+        const raw = window.localStorage.getItem(WORKSPACE_USAGE_KEY);
+        if (!raw) return Object.create(null);
+        const parsed = JSON.parse(raw);
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return Object.create(null);
+        const clean = Object.create(null);
+        Object.keys(parsed).forEach(function keep(path) {
+          const stamp = Number(parsed[path]);
+          if (path !== '' && Number.isFinite(stamp) && stamp > 0) clean[path] = stamp;
+        });
+        return clean;
+      } catch (error) {
+        return Object.create(null);
+      }
+    }
+
+    function saveWorkspaceUsage(usage) {
+      // A path is a stable key across re-registration; keep only the newest
+      // entries so a long-lived browser profile cannot grow this forever.
+      const entries = Object.keys(usage)
+        .map(function pair(path) { return [path, Number(usage[path])]; })
+        .filter(function usable(entry) { return entry[0] !== '' && Number.isFinite(entry[1]) && entry[1] > 0; })
+        .sort(function newestFirst(left, right) { return right[1] - left[1]; })
+        .slice(0, WORKSPACE_USAGE_LIMIT);
+      const clean = {};
+      entries.forEach(function keep(entry) {
+        clean[entry[0]] = entry[1];
+      });
+      try {
+        window.localStorage.setItem(WORKSPACE_USAGE_KEY, JSON.stringify(clean));
+      } catch (error) {
+        /* private mode: the order falls back to session and creation times */
+      }
+    }
+
+    function rememberWorkspaceUse(workspace) {
+      const path = workspace && typeof workspace.path === 'string' ? workspace.path : '';
+      if (path === '') return;
+      const usage = readWorkspaceUsage();
+      usage[path] = Date.now();
+      saveWorkspaceUsage(usage);
+    }
+
     const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'OS', 'AltGraph']);
 
     function normalizeKeyName(event) {
@@ -404,6 +490,42 @@ window.__ModuleLoader__.load({
       },
         h('rect', { x: 2.5, y: 5.5, width: 19, height: 13, rx: 3.5, stroke: 'currentColor', strokeWidth: 1.6 }),
         h('path', { d: 'M13.6 8.6 9.4 13.4h2.9l-1 3 4.3-5h-2.9z', fill: 'currentColor' }),
+      );
+    }
+
+    /** The picker's order control: a clock for recency, A→Z for name order. */
+    function renderSortIcon(mode) {
+      const common = {
+        width: 14,
+        height: 14,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        'aria-hidden': true,
+        focusable: false,
+        className: 'qa-palette__sort-icon',
+      };
+      if (mode === PICKER_SORT_ALPHA) {
+        return h('svg', common,
+          h('text', { x: 2.2, y: 16, fill: 'currentColor', fontSize: 10, fontWeight: 600, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }, 'A'),
+          h('path', {
+            d: 'M9 11.5h6m-2.4-2.2 2.4 2.2-2.4 2.2',
+            stroke: 'currentColor',
+            strokeWidth: 1.5,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }),
+          h('text', { x: 17.4, y: 16, fill: 'currentColor', fontSize: 10, fontWeight: 600, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }, 'Z'),
+        );
+      }
+      return h('svg', common,
+        h('circle', { cx: 12, cy: 12, r: 8, stroke: 'currentColor', strokeWidth: 1.5 }),
+        h('path', {
+          d: 'M12 7.5V12l3.1 1.9',
+          stroke: 'currentColor',
+          strokeWidth: 1.5,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        }),
       );
     }
 
@@ -484,8 +606,13 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    /** Filter and rank the workspace list for one query, keeping Host order among equals. */
-    function rankWorkspaces(items, query) {
+    /**
+     * Filter and rank the workspace list for one query. Relevance always wins;
+     * `compare` breaks ties between equally good matches and therefore also
+     * controls the whole list for an empty query. Without a comparator the
+     * Host's manual workspace order is kept among equals.
+     */
+    function rankWorkspaces(items, query, compare) {
       const ranked = [];
       (Array.isArray(items) ? items : []).forEach(function score(workspace, index) {
         if (!workspace || typeof workspace.workspaceId !== 'string' || workspace.workspaceId === '') return;
@@ -496,6 +623,10 @@ window.__ModuleLoader__.load({
       ranked.sort(function byRank(left, right) {
         for (let position = 0; position < left.rank.length; position += 1) {
           if (left.rank[position] !== right.rank[position]) return left.rank[position] - right.rank[position];
+        }
+        if (typeof compare === 'function') {
+          const ordered = compare(left.workspace, right.workspace);
+          if (ordered !== 0) return ordered;
         }
         return left.index - right.index;
       });
@@ -554,8 +685,9 @@ window.__ModuleLoader__.load({
       const noticeStore = createStore(null);
       const menuStore = createStore({ open: false, anchor: null });
       const probeStore = createStore(null);
-      // Workspace picker: open flag, the typed (ASCII) query and the highlighted row.
-      const pickerStore = createStore({ open: false, query: '', index: 0 });
+      // Workspace picker: open flag, the typed (ASCII) query, the highlighted
+      // row and the chosen order (recent use by default, A→Z on demand).
+      const pickerStore = createStore({ open: false, query: '', index: 0, sort: readPickerSort() });
 
       let capturing = false;
       let noticeTimer = 0;
@@ -770,6 +902,75 @@ window.__ModuleLoader__.load({
         return baseName((workspace && workspace.path) || '');
       }
 
+      /* -------------------------------------------------- workspace ordering */
+
+      function workspaceCollator() {
+        try {
+          return new Intl.Collator(activeLocaleId(), { numeric: true, sensitivity: 'base' });
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function compareWorkspaceNames(left, right, collator) {
+        const leftLabel = workspaceLabel(left);
+        const rightLabel = workspaceLabel(right);
+        if (collator) return collator.compare(leftLabel, rightLabel);
+        return leftLabel.localeCompare(rightLabel, activeLocaleId(), { numeric: true, sensitivity: 'base' });
+      }
+
+      /**
+       * Last-use time per workspace. The newest session in the workspace is
+       * what DSH itself treats as activity; a palette pick is stamped locally
+       * and counts too. Workspaces with no sessions and no pick fall back to
+       * when they were added or last changed.
+       */
+      function workspaceRecency(items) {
+        const sessions = ctx.get('sessions');
+        const sessionState = readSnapshot(sessions && sessions.list);
+        const byId = sessionState && sessionState.byId && typeof sessionState.byId === 'object'
+          ? sessionState.byId
+          : null;
+        const usage = readWorkspaceUsage();
+        const latest = new Map();
+        (Array.isArray(items) ? items : []).forEach(function rank(workspace) {
+          if (!workspace || typeof workspace.workspaceId !== 'string') return;
+          let time = toTimestamp(usage[workspace.path]);
+          if (byId && Array.isArray(workspace.sessionIds)) {
+            for (let index = 0; index < workspace.sessionIds.length; index += 1) {
+              const row = byId[workspace.sessionIds[index]];
+              const updated = toTimestamp(row && row.updatedAt);
+              if (updated > time) time = updated;
+            }
+          }
+          if (time === 0) {
+            time = Math.max(toTimestamp(workspace.createdAt), toTimestamp(workspace.updatedAt));
+          }
+          latest.set(workspace.workspaceId, time);
+        });
+        return latest;
+      }
+
+      function workspaceComparator(sort, items) {
+        const collator = workspaceCollator();
+        if (sort === PICKER_SORT_ALPHA) {
+          return function byName(left, right) {
+            return compareWorkspaceNames(left, right, collator);
+          };
+        }
+        const recency = workspaceRecency(items);
+        return function byRecentUse(left, right) {
+          const leftTime = recency.get(left.workspaceId) || 0;
+          const rightTime = recency.get(right.workspaceId) || 0;
+          if (leftTime !== rightTime) return rightTime - leftTime;
+          return compareWorkspaceNames(left, right, collator);
+        };
+      }
+
+      function orderedWorkspaces(items, query, sort) {
+        return rankWorkspaces(items, query, workspaceComparator(sort, items));
+      }
+
       /* ---------------------------------------------------- workspace picker */
 
       // Where the caret was before the palette took the keyboard, so cancelling
@@ -780,7 +981,7 @@ window.__ModuleLoader__.load({
         closeMenu();
         const active = document.activeElement;
         focusBeforePicker = active && active !== document.body ? active : null;
-        pickerStore.set({ open: true, query: '', index: 0 });
+        pickerStore.set({ open: true, query: '', index: 0, sort: readPickerSort() });
       }
 
       function closeWorkspacePicker(restoreFocus) {
@@ -788,7 +989,7 @@ window.__ModuleLoader__.load({
         if (!state || !state.open) return;
         const previous = focusBeforePicker;
         focusBeforePicker = null;
-        pickerStore.set({ open: false, query: '', index: 0 });
+        pickerStore.set(Object.assign({}, state, { open: false, query: '', index: 0 }));
         // A pick navigates elsewhere, so only a cancel hands the caret back.
         if (restoreFocus !== true || previous === null) return;
         if (!document.contains(previous) || typeof previous.focus !== 'function') return;
@@ -801,8 +1002,33 @@ window.__ModuleLoader__.load({
         }, 0);
       }
 
-      function pickerCandidates(query) {
-        return rankWorkspaces(workspaceItems().items, query);
+      function pickerCandidates(query, sort) {
+        const state = pickerStore.getSnapshot();
+        const mode = sort === PICKER_SORT_ALPHA || sort === PICKER_SORT_RECENT
+          ? sort
+          : ((state && state.sort) || PICKER_SORT_RECENT);
+        return orderedWorkspaces(workspaceItems().items, query, mode);
+      }
+
+      function togglePickerSort() {
+        const state = pickerStore.getSnapshot();
+        if (!state || !state.open) return;
+        const next = state.sort === PICKER_SORT_ALPHA ? PICKER_SORT_RECENT : PICKER_SORT_ALPHA;
+        // Keep the highlighted workspace highlighted when the rows move.
+        const before = pickerCandidates(state.query, state.sort);
+        const selected = before.length === 0
+          ? null
+          : before[Math.min(Math.max(state.index, 0), before.length - 1)];
+        const after = pickerCandidates(state.query, next);
+        let index = 0;
+        if (selected) {
+          const found = after.findIndex(function same(row) {
+            return row && row.workspaceId === selected.workspaceId;
+          });
+          if (found !== -1) index = found;
+        }
+        pickerStore.set(Object.assign({}, state, { sort: next, index }));
+        writePickerSort(next);
       }
 
       function setPickerQuery(query) {
@@ -814,7 +1040,7 @@ window.__ModuleLoader__.load({
 
       function movePickerCursor(delta) {
         const state = pickerStore.getSnapshot();
-        const list = pickerCandidates(state.query);
+        const list = pickerCandidates(state.query, state.sort);
         if (list.length === 0) return;
         const stepped = (((state.index + delta) % list.length) + list.length) % list.length;
         if (stepped === state.index) return;
@@ -824,7 +1050,7 @@ window.__ModuleLoader__.load({
       /** Jump to an absolute row (Home / End / paging), clamped to the list. */
       function setPickerCursor(index) {
         const state = pickerStore.getSnapshot();
-        const list = pickerCandidates(state.query);
+        const list = pickerCandidates(state.query, state.sort);
         if (list.length === 0) return;
         const next = Math.min(Math.max(index, 0), list.length - 1);
         if (next === state.index) return;
@@ -833,6 +1059,7 @@ window.__ModuleLoader__.load({
 
       function commitWorkspacePicker(workspace) {
         if (!workspace) return;
+        rememberWorkspaceUse(workspace);
         closeWorkspacePicker(false);
         const name = workspaceLabel(workspace) || workspace.workspaceId;
         const uiWorkspace = ctx.get('uiWorkspace');
@@ -871,7 +1098,7 @@ window.__ModuleLoader__.load({
 
       function selectCurrentPickerWorkspace() {
         const state = pickerStore.getSnapshot();
-        const list = pickerCandidates(state.query);
+        const list = pickerCandidates(state.query, state.sort);
         if (list.length === 0) return;
         commitWorkspacePicker(list[Math.min(Math.max(state.index, 0), list.length - 1)]);
       }
@@ -1696,6 +1923,7 @@ window.__ModuleLoader__.load({
           const listRef = useRef(null);
           const open = Boolean(state && state.open);
           const query = (state && state.query) || '';
+          const sortMode = (state && state.sort) || PICKER_SORT_RECENT;
 
           useEffect(function focusSearchOnOpen() {
             if (!open) return undefined;
@@ -1743,7 +1971,7 @@ window.__ModuleLoader__.load({
             : workspaceItems().items;
           const listFailed = Boolean(workspaceSnapshot && workspaceSnapshot.error);
           const phase = workspaceSnapshot && workspaceSnapshot.phase;
-          const candidates = rankWorkspaces(allWorkspaces, query);
+          const candidates = orderedWorkspaces(allWorkspaces, query, sortMode);
           const activeIndex = candidates.length === 0
             ? -1
             : Math.min(Math.max(state.index, 0), candidates.length - 1);
@@ -1758,6 +1986,24 @@ window.__ModuleLoader__.load({
           const shortcut = pickerAction
             ? effectiveShortcut(pickerAction, catalogState.overrides || {})
             : '';
+
+          const sortHint = t(sortMode === PICKER_SORT_ALPHA
+            ? 'picker.sort.switchToRecent'
+            : 'picker.sort.switchToAlpha');
+          const sortButton = allWorkspaces.length > 1
+            ? h('button', {
+              type: 'button',
+              className: 'qa-palette__sort',
+              title: sortHint,
+              'aria-label': sortHint,
+              'aria-pressed': sortMode === PICKER_SORT_ALPHA ? 'true' : 'false',
+              onClick: togglePickerSort,
+            },
+              renderSortIcon(sortMode),
+              h('span', { className: 'qa-palette__sort-label' },
+                t(sortMode === PICKER_SORT_ALPHA ? 'picker.sort.alpha' : 'picker.sort.recent')),
+            )
+            : null;
 
           let body;
           if (allWorkspaces.length === 0) {
@@ -1825,6 +2071,7 @@ window.__ModuleLoader__.load({
             },
               h('div', { className: 'qa-palette__head' },
                 h('span', { className: 'qa-palette__head-title' }, t('picker.title')),
+                sortButton,
                 shortcut === ''
                   ? null
                   : h('span', { className: 'qa-palette__keys' }, renderShortcutChips(shortcut, '')),
@@ -1984,6 +2231,11 @@ window.__ModuleLoader__.load({
       '.qa-palette__head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 0; }',
       '.qa-palette__head-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dsw-alias-label-tertiary); }',
       '.qa-palette__keys { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }',
+      '.qa-palette__sort { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; line-height: 16px; cursor: pointer; }',
+      '.qa-palette__sort:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }',
+      '.qa-palette__sort:focus-visible { outline: 2px solid var(--dsw-focus-ring-color); outline-offset: 1px; }',
+      '.qa-palette__sort-icon { flex: none; display: block; }',
+      '.qa-palette__sort-label { white-space: nowrap; }',
       '.qa-palette__search { display: flex; align-items: center; gap: 8px; padding: 8px 14px 12px; border-bottom: 1px solid var(--dsw-alias-border-l1); }',
       '.qa-palette__prompt { flex: none; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-tertiary); }',
       '.qa-palette__input { flex: 1 1 auto; min-width: 0; padding: 0; border: none; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 15px; line-height: 22px; }',

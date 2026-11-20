@@ -14,6 +14,7 @@
  *   - the palette still owns its navigation strokes and hides every stroke from
  *     the app's shortcut layer;
  *   - ranking filters and orders workspaces (prefix > infix > subsequence, title > name > path);
+ *   - the default recent-use order, the A→Z toggle and its saved preference;
  *   - Enter opens the highlighted workspace and reports completion only afterwards;
  *   - Escape closes and releases the keyboard;
  *   - a binding the user recorded outranks a newly added default;
@@ -31,6 +32,8 @@ const SOURCE = path.join(__dirname, '..', 'client.js')
 const source = fs.readFileSync(SOURCE, 'utf8')
 
 const BINDINGS_KEY = 'dsh.quick-actions.bindings.v1'
+const SORT_KEY = 'dsh.quick-actions.picker-sort.v1'
+const USAGE_KEY = 'dsh.quick-actions.workspace-usage.v1'
 
 const CATALOG = {
   version: 1,
@@ -64,22 +67,60 @@ const CATALOG = {
 }
 
 const WORKSPACES = [
-  { workspaceId: 'w-quick', title: 'dsh-quick-actions', path: '/Volumes/External/GIT/sunshow/dsh-quick-actions', sessionIds: ['s1'] },
-  { workspaceId: 'w-dsh', title: 'dsh', path: '/Volumes/External/GIT/sunshow/dsh', sessionIds: [] },
-  { workspaceId: 'w-seller', title: 'seller-fe-admin', path: '/Volumes/External/GIT/mamba/seller/seller-fe-admin', sessionIds: [] },
-  { workspaceId: 'w-default', title: 'default-workspace', path: '/Users/tester/Documents/deepseek-harness/default-workspace', sessionIds: [] },
+  {
+    workspaceId: 'w-quick',
+    title: 'dsh-quick-actions',
+    path: '/Volumes/External/GIT/sunshow/dsh-quick-actions',
+    sessionIds: ['s1'],
+    createdAt: '2020-11-18T09:00:00.000Z',
+    updatedAt: '2020-11-19T09:00:00.000Z',
+  },
+  {
+    workspaceId: 'w-dsh',
+    title: 'dsh',
+    path: '/Volumes/External/GIT/sunshow/dsh',
+    sessionIds: [],
+    createdAt: '2020-11-20T09:00:00.000Z',
+    updatedAt: '2020-11-20T09:00:00.000Z',
+  },
+  {
+    workspaceId: 'w-seller',
+    title: 'seller-fe-admin',
+    path: '/Volumes/External/GIT/mamba/seller/seller-fe-admin',
+    sessionIds: [],
+    createdAt: '2020-11-19T09:00:00.000Z',
+    updatedAt: '2020-11-19T09:00:00.000Z',
+  },
+  {
+    workspaceId: 'w-default',
+    title: 'default-workspace',
+    path: '/Users/tester/Documents/deepseek-harness/default-workspace',
+    sessionIds: [],
+    createdAt: '2020-11-17T09:00:00.000Z',
+    updatedAt: '2020-11-17T09:00:00.000Z',
+  },
 ]
+
+const RECENT_ORDER = ['dsh', 'dsh-quick-actions', 'seller-fe-admin', '默认工作区']
+const ALPHA_ORDER = ['默认工作区', 'dsh', 'dsh-quick-actions', 'seller-fe-admin']
 
 /* -------------------------------------------------------------------- host */
 
 /**
  * Boot the plugin against a throwaway host.
- * @param seed overrides written to localStorage before the plugin reads them.
+ * @param seed binding overrides written before the plugin reads them.
+ * @param storage extra localStorage entries (sort preference, usage log, ...).
  */
-function boot(seed = {}) {
+function boot(seed = {}, storage = {}) {
   let capturedFactory = null
   const listeners = { keydown: [] }
   const portals = []
+
+  const store = {}
+  if (Object.keys(seed).length > 0) store[BINDINGS_KEY] = JSON.stringify(seed)
+  Object.keys(storage).forEach((key) => {
+    store[key] = String(storage[key])
+  })
 
   const fakeWindow = {
     __ModuleLoader__: {
@@ -98,7 +139,7 @@ function boot(seed = {}) {
       clearTimeout(handle)
     },
     localStorage: {
-      store: Object.keys(seed).length === 0 ? {} : { [BINDINGS_KEY]: JSON.stringify(seed) },
+      store,
       getItem(key) {
         return Object.prototype.hasOwnProperty.call(this.store, key) ? this.store[key] : null
       },
@@ -192,7 +233,14 @@ function boot(seed = {}) {
       list: {
         getSnapshot: () => ({
           current: 's1',
-          byId: { s1: { id: 's1', cwd: WORKSPACES[0].path, retainedBy: { mainView: 1 } } },
+          byId: {
+            s1: {
+              id: 's1',
+              cwd: WORKSPACES[0].path,
+              retainedBy: { mainView: 1 },
+              updatedAt: Date.parse('2020-11-19T10:00:00.000Z'),
+            },
+          },
         }),
       },
     },
@@ -318,6 +366,19 @@ function boot(seed = {}) {
     })
   }
 
+  /** The order toggle rendered in the palette head. */
+  function sortControl() {
+    const tree = picker.component()
+    if (!tree) return { button: null, label: '', icon: null }
+    const button = collect(tree, (node) => node.type === 'button'
+      && /qa-palette__sort/.test(String(node.props && node.props.className)))[0]
+    if (!button) return { button: null, label: '', icon: null }
+    const label = collect(button, (node) => node.type === 'span'
+      && /qa-palette__sort-label/.test(String(node.props && node.props.className)))[0]
+    const icon = collect(button, (node) => node.type === 'svg')[0]
+    return { button, label: label ? label.children[0] : '', icon: icon || null }
+  }
+
   /** Latest toast the notice layer would show. */
   function toast() {
     const tree = notice.component()
@@ -331,7 +392,11 @@ function boot(seed = {}) {
     }
   }
 
-  return { press, field, type, palette, toast, opened, portals, registered, picker, fieldElement, noticeTree: () => notice.component() }
+  return {
+    press, field, type, palette, sortControl, toast, opened, portals, registered, picker, fieldElement,
+    storage: fakeWindow.localStorage.store,
+    noticeTree: () => notice.component(),
+  }
 }
 
 /* -------------------------------------------------------------------- checks */
@@ -366,6 +431,26 @@ const stroke = { key: 'N', code: 'KeyN', meta: true, shift: true }
   check('both fixed layers are portalled', app.portals.length >= 1, true)
   check('every workspace is listed', app.palette().rows.length, WORKSPACES.length)
   check('the automatic default workspace reads as a name', app.palette().rows.indexOf('默认工作区') >= 0, true)
+
+  // Recency is the default: the newest session in a workspace outranks the
+  // other workspaces' registration times, and the header offers an A→Z toggle.
+  check('the default order is most recently used first', app.palette().rows, RECENT_ORDER)
+  check('the order control starts on recent use', app.sortControl().label, '最近')
+  check('the order control renders an icon', Boolean(app.sortControl().icon), true)
+  check('the control names the current and next order', app.sortControl().button.props.title,
+    '当前按最近使用排序，点击切换为 A→Z 排序')
+  app.sortControl().button.props.onClick()
+  check('the order control switches to A→Z', app.sortControl().label, 'A→Z')
+  check('the control names the reverse switch', app.sortControl().button.props.title,
+    '当前按 A→Z 排序，点击切换为最近使用排序')
+  check('the list becomes alphabetical', app.palette().rows, ALPHA_ORDER)
+  check('the highlighted workspace survives the reorder', app.palette().active, 1)
+  check('the toggled order is remembered', app.storage[SORT_KEY], 'alpha')
+  app.sortControl().button.props.onClick()
+  check('the order control returns to recent use', app.sortControl().label, '最近')
+  check('the recent order is restored', app.palette().rows, RECENT_ORDER)
+  check('the highlight follows the workspace back', app.palette().active, 0)
+  check('the restored order is remembered', app.storage[SORT_KEY], 'recent')
 
   // Typing belongs to the field: the palette neither cancels the stroke nor
   // adds the character itself, so an active input method cannot double it.
@@ -492,6 +577,36 @@ const stroke = { key: 'N', code: 'KeyN', meta: true, shift: true }
   check('Escape closes after a failed query', app.palette().open, false)
 
   check('a bare modifier is inert when closed', app.press({ key: 'Shift', shift: true }).defaultPrevented, false)
+
+  // Picks are stamped locally, so the workspace chosen last comes first even
+  // when its sessions are older than another workspace's registration time.
+  app.press(stroke)
+  check('the last pick leads the recent order', app.palette().rows, ['seller-fe-admin', 'dsh', 'dsh-quick-actions', '默认工作区'])
+  app.press({ key: 'Escape' })
+  const usage = JSON.parse(app.storage[USAGE_KEY] || '{}')
+  check('each pick is remembered in the usage log', Object.keys(usage).sort(), [WORKSPACES[1].path, WORKSPACES[2].path].sort())
+
+  // The chosen order is a preference: a saved A→Z mode is restored, while a
+  // query still ranks exact matches ahead of the alphabetical order.
+  const saved = boot({}, { [SORT_KEY]: 'alpha' })
+  await tick()
+  saved.press(stroke)
+  check('a saved A→Z preference is restored', saved.palette().rows, ALPHA_ORDER)
+  check('the restored control reads A→Z', saved.sortControl().label, 'A→Z')
+  saved.type('dsh')
+  check('search relevance still wins in A→Z mode', saved.palette().rows, ['dsh', 'dsh-quick-actions'])
+  saved.press({ key: 'Escape' })
+
+  const used = boot({}, {
+    [USAGE_KEY]: JSON.stringify({
+      [WORKSPACES[0].path]: Date.now() + 1000,
+      [WORKSPACES[2].path]: Date.now() + 2000,
+    }),
+  })
+  await tick()
+  used.press(stroke)
+  check('a stored pick outranks session and creation times', used.palette().rows, ['seller-fe-admin', 'dsh-quick-actions', 'dsh', '默认工作区'])
+  used.press({ key: 'Escape' })
 
   // A stroke the user recorded earlier outranks the default the update added.
   const bound = boot({ 'session.new': 'Mod+Shift+N' })

@@ -78,8 +78,8 @@ const ACTION_DEFINITIONS = [
     clientAction: 'session.newInWorkspace',
     title: { zh: '在指定工作区新建会话', en: 'New session in a workspace' },
     hint: {
-      zh: '打开工作区选择面板：直接键入即可搜索（按键按英文字符读取，等同英文输入态），↑↓ 选择、Enter 在该工作区新建会话。浏览器标签页会抢占 ⌘⇧N，必要时可在此改绑',
-      en: 'Opens a workspace picker: type to search (keys are read as plain letters, bypassing the input method), ↑↓ to move, Enter creates a session there. A browser tab owns ⌘⇧N — rebind here when needed',
+      zh: '打开工作区选择面板：直接键入即可搜索（按键按英文字符读取，等同英文输入态），↑↓ 选择、Enter 在该工作区新建会话。列表默认按最近使用排序，右上角 A→Z 按钮可切换为按名称排序。浏览器标签页会抢占 ⌘⇧N，必要时可在此改绑',
+      en: 'Opens a workspace picker: type to search (keys are read as plain letters, bypassing the input method), ↑↓ to move, Enter creates a session there. The list defaults to recent-use order; the A→Z button in the header switches to name order. A browser tab owns ⌘⇧N — rebind here when needed',
     },
     commandLabel: '',
     defaultShortcut: { mac: 'Mod+Shift+N', other: 'Mod+Shift+N' },
